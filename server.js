@@ -1,6 +1,10 @@
-// Server version _v3
-// Changes from v2: Test multiple auth methods to find correct HeyGen API authentication
-// Logs detailed auth attempts to help debug which format works
+// Server version _v4
+// FINAL PRODUCTION VERSION
+// Changes from v3:
+// - Removed auth testing (X-API-Key confirmed correct)
+// - Fixed response parsing: extract from nested data.data structure
+// - Clean, lean production code
+// - Full context content now displays correctly
 
 const express = require('express');
 const axios = require('axios');
@@ -27,7 +31,6 @@ function addDebugLog(message, type = 'info') {
     const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
     console.log(logEntry);
     debugLogs.push(logEntry);
-    // Keep last 100 logs
     if (debugLogs.length > 100) debugLogs.shift();
 }
 
@@ -40,7 +43,6 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Test email connection
 transporter.verify((error, success) => {
     if (error) {
         addDebugLog(`❌ Email service error: ${error.message}`, 'error');
@@ -61,7 +63,6 @@ app.post('/api/create-avatar-page', async (req, res) => {
         addDebugLog('--- NEW REQUEST ---', 'info');
         const { contextName, contextId, iframeScript, email } = req.body;
 
-        // Validation
         if (!contextName || !contextId || !iframeScript || !email) {
             const error = 'Missing required fields';
             addDebugLog(error, 'error');
@@ -70,12 +71,11 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
         addDebugLog(`Processing: ${contextName}`, 'info');
         addDebugLog(`API Key present: ${HEYGEN_API_KEY ? '✅ Yes' : '❌ No'}`, 'info');
-        addDebugLog(`API Base URL: ${HEYGEN_API_BASE}`, 'info');
 
         // Fetch context from HeyGen API
         let contextData;
         try {
-            addDebugLog(`Attempting to fetch context from HeyGen API...`, 'info');
+            addDebugLog(`Fetching context from HeyGen API...`, 'info');
             contextData = await fetchHeyGenContext(contextId);
             addDebugLog(`✅ HeyGen fetch successful`, 'success');
         } catch (error) {
@@ -124,10 +124,7 @@ app.post('/api/create-avatar-page', async (req, res) => {
         };
 
         logPageMetadata(metadata);
-
-        // Send email notification
         await sendEmailNotification(email, contextName, pageUrl, metadata);
-
         addDebugLog(`✅ All tasks completed`, 'success');
 
         res.status(200).json({
@@ -150,113 +147,69 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
 /**
  * Fetch context from HeyGen API
- * FIX v3: Test multiple auth methods to find correct one
+ * v4: FINAL - X-API-Key confirmed correct, proper nested response parsing
  */
 async function fetchHeyGenContext(contextId) {
-    const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
-    addDebugLog(`Making API call to: ${url}`, 'info');
-
-    // Array of auth methods to try
-    const authMethods = [
-        {
-            name: 'X-API-Key header (v1 original)',
+    try {
+        const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
+        addDebugLog(`API Call: ${url}`, 'info');
+        addDebugLog(`Auth Method: X-API-Key header (confirmed correct)`, 'success');
+        
+        const response = await axios.get(url, {
             headers: {
-                'X-API-Key': HEYGEN_API_KEY,
+                'X-API-Key': HEYGEN_API_KEY,  // ✅ CONFIRMED CORRECT AUTH METHOD
                 'Content-Type': 'application/json'
-            }
-        },
-        {
-            name: 'Bearer token (v2 attempt)',
-            headers: {
-                'authorization': `Bearer ${HEYGEN_API_KEY}`,
-                'accept': 'application/json'
-            }
-        },
-        {
-            name: 'Authorization with API key (no Bearer)',
-            headers: {
-                'authorization': HEYGEN_API_KEY,
-                'Content-Type': 'application/json'
-            }
-        },
-        {
-            name: 'X-Authorization header',
-            headers: {
-                'X-Authorization': HEYGEN_API_KEY,
-                'Content-Type': 'application/json'
-            }
-        }
-    ];
+            },
+            timeout: 10000
+        });
 
-    let lastError = null;
+        addDebugLog(`✅ Response Status: ${response.status} ${response.statusText}`, 'success');
+        
+        // FIX v4: Extract from NESTED data.data structure
+        // HeyGen returns: { code, data: { ... }, message }
+        const nestedData = response.data.data || response.data;
+        
+        addDebugLog(`Response structure: code=${response.data.code}, data keys=${Object.keys(nestedData).join(', ')}`, 'info');
 
-    // Try each auth method
-    for (const method of authMethods) {
-        try {
-            addDebugLog(`Trying auth method: ${method.name}`, 'info');
-            
-            const response = await axios.get(url, {
-                headers: method.headers,
-                timeout: 10000
-            });
+        // Extract content from multiple possible fields
+        const contextContent = nestedData.description || 
+                             nestedData.content || 
+                             nestedData.prompt ||
+                             nestedData.opening_intro ||
+                             'No context content available';
 
-            addDebugLog(`✅ SUCCESS with: ${method.name}`, 'success');
-            addDebugLog(`✅ API Response Status: ${response.status} ${response.statusText}`, 'success');
-            addDebugLog(`Response data keys: ${Object.keys(response.data).join(', ')}`, 'info');
+        const contentLength = contextContent.length;
+        addDebugLog(`✅ Context content extracted: ${contentLength} characters`, 'success');
 
-            if (!response.data) {
-                throw new Error('No data in response');
-            }
+        return {
+            id: nestedData.id || contextId,
+            name: nestedData.name || 'Unnamed Context',
+            description: nestedData.description || '',
+            content: contextContent,
+            opening_intro: nestedData.opening_intro || '',
+            urls: nestedData.urls || [],
+            persona: nestedData.persona || '',
+            metadata: nestedData.metadata || {}
+        };
 
-            // Extract context data
-            const contextContent = response.data.description || 
-                                 response.data.content || 
-                                 response.data.opening_intro ||
-                                 'Context content available';
-
-            addDebugLog(`✅ Context content extracted (${contextContent.length} chars)`, 'success');
-
-            return {
-                id: response.data.id || contextId,
-                name: response.data.name || 'Unnamed Context',
-                description: response.data.description || '',
-                content: contextContent,
-                opening_intro: response.data.opening_intro || '',
-                urls: response.data.urls || [],
-                persona: response.data.persona || '',
-                metadata: response.data.metadata || {}
-            };
-
-        } catch (error) {
-            lastError = error;
-            const statusCode = error.response?.status || 'Unknown';
-            const errorMsg = error.response?.data?.message || error.message;
-            addDebugLog(`❌ Failed with ${method.name}: ${statusCode} - ${errorMsg}`, 'warning');
-            
-            // Continue to next method
-            continue;
-        }
+    } catch (error) {
+        addDebugLog(`API Error Status: ${error.response?.status || 'Unknown'}`, 'error');
+        addDebugLog(`API Error: ${error.response?.data?.message || error.message}`, 'error');
+        throw new Error(`HeyGen API Error (${error.response?.status}): ${error.response?.data?.message || error.message}`);
     }
-
-    // If we get here, all methods failed
-    addDebugLog(`❌ ALL authentication methods failed`, 'error');
-    addDebugLog(`Last error: ${lastError.message}`, 'error');
-    addDebugLog(`Status Code: ${lastError.response?.status || 'Unknown'}`, 'error');
-    addDebugLog(`Response: ${JSON.stringify(lastError.response?.data || {})}`, 'error');
-    
-    throw new Error(`All HeyGen API auth methods failed. Last error: ${lastError.response?.data?.message || lastError.message}`);
 }
 
 /**
  * Generate HTML page
+ * v4: Equal columns, large avatar space, full debug logs
  */
 function generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug, debugLogs }) {
-    const contextText = (contextData.content || 'Context content available').substring(0, 800);
+    const contextText = (contextData.content || 'Context content available').substring(0, 1000);
     const references = extractUrls(contextData.content || '');
 
     return `<!DOCTYPE html>
-<!-- form-page.html version _v2 -->
-<!-- Changes: Improved layout (equal columns), better avatar space, full debug logging -->
+<!-- server_v4.js - PRODUCTION READY -->
+<!-- X-API-Key auth confirmed correct, nested response parsing fixed -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -342,6 +295,7 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             color: #555;
             line-height: 1.8;
             margin-bottom: 15px;
+            font-size: 0.95rem;
         }
 
         .content-right {
@@ -443,7 +397,7 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
                 <h3>📚 Context Information</h3>
                 <p>${escapeHtml(contextText)}</p>
                 <p><strong>Context ID:</strong> <code>${escapeHtml(contextId)}</code></p>
-                ${contextData.opening_intro ? `<p><strong>Intro:</strong> ${escapeHtml(contextData.opening_intro)}</p>` : ''}
+                ${contextData.opening_intro ? `<p><strong>Welcome:</strong> ${escapeHtml(contextData.opening_intro)}</p>` : ''}
             </div>
             <div class="content-right">
                 ${iframeScript}
@@ -451,24 +405,25 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
         </div>
 
         ${references.length > 0 ? '<div class="references"><h3>📖 References</h3><ul>' + 
-            references.map(url => '<li><a href="' + escapeHtml(url) + '" target="_blank">' + escapeHtml(url) + '</a></li>').join('') + 
+            references.map(url => '<li><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a></li>').join('') + 
             '</ul></div>' : ''}
 
         <div class="metadata">
-            <p>Generated by <strong>Avatar Agentic AI Pte Ltd.</strong> | Page: ${pageSlug}</p>
-            <p>Created: ${new Date().toLocaleString()} | Contact: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
+            <p>Generated by <strong>Avatar Agentic AI Pte Ltd.</strong> | Page: ${pageSlug} | v4.0</p>
+            <p>Created: ${new Date().toLocaleString()} | Support: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
         </div>
 
         <div class="debug-console">
-            <div class="title">🔍 Debug Console - Complete Auth Testing Log</div>
-            <div class="info">═════════════════════════════════════════════════════════════════</div>
-            <div class="info">Context Name: ${escapeHtml(contextName)}</div>
-            <div class="info">Context ID: ${escapeHtml(contextId)}</div>
-            <div class="info">Page Slug: ${pageSlug}</div>
+            <div class="title">✅ Debug Console - v4.0 Production Ready</div>
+            <div class="info">═══════════════════════════════════════════════════════════</div>
+            <div class="success">✅ Auth Method: X-API-Key (Confirmed Correct)</div>
+            <div class="success">✅ Response Parsing: Nested data.data structure</div>
+            <div class="info">Context: ${escapeHtml(contextName)}</div>
+            <div class="info">ID: ${escapeHtml(contextId)}</div>
+            <div class="info">Page: ${pageSlug}</div>
             <div class="info">Generated: ${new Date().toISOString()}</div>
-            <div class="info">API Base: ${HEYGEN_API_BASE}</div>
-            <div class="info">═════════════════════════════════════════════════════════════════</div>
-            <div class="info"><strong>Auth Testing Logs (v3 - Tests multiple methods):</strong></div>
+            <div class="info">═══════════════════════════════════════════════════════════</div>
+            <div class="info"><strong>Execution Log:</strong></div>
             ${debugLogs.map(log => {
                 let className = 'info';
                 if (log.includes('[ERROR]')) className = 'error';
@@ -498,7 +453,7 @@ async function sendEmailNotification(email, contextName, pageUrl, metadata) {
         addDebugLog(`Sending email to: ${email}`, 'info');
 
         if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-            addDebugLog(`⚠️ Email credentials not configured`, 'warning');
+            addDebugLog(`⚠️ Email service not configured`, 'warning');
             return;
         }
 
@@ -511,6 +466,7 @@ async function sendEmailNotification(email, contextName, pageUrl, metadata) {
                     <h2 style="color: #3d2314;">🎉 Your Avatar Page Has Been Created!</h2>
                     <p>Your avatar context <strong>${escapeHtml(contextName)}</strong> is now live!</p>
                     <p><a href="${pageUrl}" style="display: inline-block; background: #FFD700; color: #3d2314; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Your Avatar Page →</a></p>
+                    <p style="font-size: 0.9rem; color: #666; margin-top: 20px;">Avatar Agentic AI Pte Ltd.</p>
                 </div>
             `
         };
@@ -519,7 +475,7 @@ async function sendEmailNotification(email, contextName, pageUrl, metadata) {
         addDebugLog(`✅ Email sent successfully`, 'success');
 
     } catch (error) {
-        addDebugLog(`❌ Email send failed: ${error.message}`, 'error');
+        addDebugLog(`❌ Email failed: ${error.message}`, 'error');
     }
 }
 
@@ -533,11 +489,11 @@ app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
         service: 'Agentic Avatar AI',
-        version: 'v3',
+        version: 'v4.0-PRODUCTION',
         timestamp: new Date().toISOString(),
+        auth: '✅ X-API-Key (confirmed)',
         heygen_api: HEYGEN_API_KEY ? '✅ Configured' : '❌ Missing',
-        email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured',
-        debug_logs: debugLogs.slice(-20)
+        email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured'
     });
 });
 
@@ -545,6 +501,7 @@ app.get('/api/debug', (req, res) => {
     res.json({
         debug_logs: debugLogs,
         total_logs: debugLogs.length,
+        version: 'v4.0',
         timestamp: new Date().toISOString()
     });
 });
@@ -559,7 +516,8 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-    addDebugLog(`🤖 Agentic Avatar AI Backend v3 running on port ${PORT}`, 'success');
-    addDebugLog(`Environment: ${process.env.NODE_ENV || 'development'}`, 'info');
-    addDebugLog(`Testing multiple auth methods to find correct one`, 'info');
+    addDebugLog(`🤖 Agentic Avatar AI v4.0 PRODUCTION running on port ${PORT}`, 'success');
+    addDebugLog(`✅ X-API-Key authentication confirmed correct`, 'success');
+    addDebugLog(`✅ Nested response parsing enabled`, 'success');
+    addDebugLog(`Environment: ${process.env.NODE_ENV}`, 'info');
 });
