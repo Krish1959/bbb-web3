@@ -1,5 +1,6 @@
-// Server version _v2
-// Changes from v1: Fixed HeyGen API headers (Bearer token), improved debug logging with HTTP status codes
+// Server version _v3
+// Changes from v2: Test multiple auth methods to find correct HeyGen API authentication
+// Logs detailed auth attempts to help debug which format works
 
 const express = require('express');
 const axios = require('axios');
@@ -74,7 +75,7 @@ app.post('/api/create-avatar-page', async (req, res) => {
         // Fetch context from HeyGen API
         let contextData;
         try {
-            addDebugLog(`Fetching context from HeyGen API...`, 'info');
+            addDebugLog(`Attempting to fetch context from HeyGen API...`, 'info');
             contextData = await fetchHeyGenContext(contextId);
             addDebugLog(`✅ HeyGen fetch successful`, 'success');
         } catch (error) {
@@ -149,62 +150,105 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
 /**
  * Fetch context from HeyGen API
- * FIX v2: Use correct Bearer token format per Gemini documentation
+ * FIX v3: Test multiple auth methods to find correct one
  */
 async function fetchHeyGenContext(contextId) {
-    try {
-        const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
-        addDebugLog(`Making API call to: ${url}`, 'info');
-        addDebugLog(`Using Authorization: Bearer [API_KEY]`, 'info');
-        
-        const response = await axios.get(url, {
+    const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
+    addDebugLog(`Making API call to: ${url}`, 'info');
+
+    // Array of auth methods to try
+    const authMethods = [
+        {
+            name: 'X-API-Key header (v1 original)',
             headers: {
-                'authorization': `Bearer ${HEYGEN_API_KEY}`,  // ✅ FIXED: Bearer token format
+                'X-API-Key': HEYGEN_API_KEY,
+                'Content-Type': 'application/json'
+            }
+        },
+        {
+            name: 'Bearer token (v2 attempt)',
+            headers: {
+                'authorization': `Bearer ${HEYGEN_API_KEY}`,
                 'accept': 'application/json'
-            },
-            timeout: 10000
-        });
-
-        addDebugLog(`✅ API Response Status: ${response.status} ${response.statusText}`, 'success');
-        addDebugLog(`Response data keys: ${Object.keys(response.data).join(', ')}`, 'info');
-
-        if (!response.data) {
-            throw new Error('No data in response');
+            }
+        },
+        {
+            name: 'Authorization with API key (no Bearer)',
+            headers: {
+                'authorization': HEYGEN_API_KEY,
+                'Content-Type': 'application/json'
+            }
+        },
+        {
+            name: 'X-Authorization header',
+            headers: {
+                'X-Authorization': HEYGEN_API_KEY,
+                'Content-Type': 'application/json'
+            }
         }
+    ];
 
-        // Extract context data
-        const contextContent = response.data.description || 
-                             response.data.content || 
-                             response.data.opening_intro ||
-                             'Context content available';
+    let lastError = null;
 
-        addDebugLog(`✅ Context content extracted (${contextContent.length} chars)`, 'success');
+    // Try each auth method
+    for (const method of authMethods) {
+        try {
+            addDebugLog(`Trying auth method: ${method.name}`, 'info');
+            
+            const response = await axios.get(url, {
+                headers: method.headers,
+                timeout: 10000
+            });
 
-        return {
-            id: response.data.id || contextId,
-            name: response.data.name || 'Unnamed Context',
-            description: response.data.description || '',
-            content: contextContent,
-            opening_intro: response.data.opening_intro || '',
-            urls: response.data.urls || [],
-            persona: response.data.persona || '',
-            metadata: response.data.metadata || {}
-        };
+            addDebugLog(`✅ SUCCESS with: ${method.name}`, 'success');
+            addDebugLog(`✅ API Response Status: ${response.status} ${response.statusText}`, 'success');
+            addDebugLog(`Response data keys: ${Object.keys(response.data).join(', ')}`, 'info');
 
-    } catch (error) {
-        addDebugLog(`❌ API Error Details:`, 'error');
-        addDebugLog(`  Status Code: ${error.response?.status || 'Unknown'}`, 'error');
-        addDebugLog(`  Status Text: ${error.response?.statusText || 'Unknown'}`, 'error');
-        addDebugLog(`  Error Message: ${error.response?.data?.message || error.message}`, 'error');
-        addDebugLog(`  Full Response: ${JSON.stringify(error.response?.data || {})}`, 'error');
-        
-        throw new Error(`HeyGen API Error (${error.response?.status || '?'}): ${error.response?.data?.message || error.message}`);
+            if (!response.data) {
+                throw new Error('No data in response');
+            }
+
+            // Extract context data
+            const contextContent = response.data.description || 
+                                 response.data.content || 
+                                 response.data.opening_intro ||
+                                 'Context content available';
+
+            addDebugLog(`✅ Context content extracted (${contextContent.length} chars)`, 'success');
+
+            return {
+                id: response.data.id || contextId,
+                name: response.data.name || 'Unnamed Context',
+                description: response.data.description || '',
+                content: contextContent,
+                opening_intro: response.data.opening_intro || '',
+                urls: response.data.urls || [],
+                persona: response.data.persona || '',
+                metadata: response.data.metadata || {}
+            };
+
+        } catch (error) {
+            lastError = error;
+            const statusCode = error.response?.status || 'Unknown';
+            const errorMsg = error.response?.data?.message || error.message;
+            addDebugLog(`❌ Failed with ${method.name}: ${statusCode} - ${errorMsg}`, 'warning');
+            
+            // Continue to next method
+            continue;
+        }
     }
+
+    // If we get here, all methods failed
+    addDebugLog(`❌ ALL authentication methods failed`, 'error');
+    addDebugLog(`Last error: ${lastError.message}`, 'error');
+    addDebugLog(`Status Code: ${lastError.response?.status || 'Unknown'}`, 'error');
+    addDebugLog(`Response: ${JSON.stringify(lastError.response?.data || {})}`, 'error');
+    
+    throw new Error(`All HeyGen API auth methods failed. Last error: ${lastError.response?.data?.message || lastError.message}`);
 }
 
 /**
  * Generate HTML page
- * FIX v2: Improved layout (equal columns), better styling, full debug logs in page
  */
 function generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug, debugLogs }) {
     const contextText = (contextData.content || 'Context content available').substring(0, 800);
@@ -272,10 +316,9 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
 
         .container { max-width: 1400px; margin: 30px auto; padding: 20px; }
 
-        /* FIX v2: Equal 2-column layout for content + avatar */
         .content-wrapper { 
             display: grid; 
-            grid-template-columns: 1fr 1fr;  /* ✅ FIXED: Equal columns instead of 2fr 1fr */
+            grid-template-columns: 1fr 1fr;
             gap: 30px; 
             margin-bottom: 30px; 
         }
@@ -301,7 +344,6 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             margin-bottom: 15px;
         }
 
-        /* FIX v2: Larger avatar container */
         .content-right {
             background: white;
             padding: 20px;
@@ -312,16 +354,14 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             flex-direction: column;
         }
 
-        /* FIX v2: Better iframe sizing */
         .content-right iframe {
             width: 100%;
-            height: 600px;  /* ✅ FIXED: Increased from 500px to give more space */
+            height: 600px;
             border: none;
             border-radius: 8px;
             flex-grow: 1;
         }
 
-        /* FIX v2: Full width for references and metadata */
         .references {
             background: white;
             padding: 30px;
@@ -355,7 +395,6 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             width: 100%;
         }
 
-        /* FIX v2: Comprehensive debug console */
         .debug-console {
             background: #1a1a1a;
             color: #0f0;
@@ -389,11 +428,6 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             .references ul { columns: 1; }
             .content-right iframe { height: 450px; }
         }
-
-        @media (max-width: 768px) {
-            .header h1 { font-size: 2rem; }
-            .content-right iframe { height: 350px; }
-        }
     </style>
 </head>
 <body>
@@ -404,7 +438,6 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
     <div class="gold-divider"></div>
 
     <div class="container">
-        <!-- FIX v2: Equal column layout -->
         <div class="content-wrapper">
             <div class="content-left">
                 <h3>📚 Context Information</h3>
@@ -426,9 +459,8 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             <p>Created: ${new Date().toLocaleString()} | Contact: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
         </div>
 
-        <!-- FIX v2: Full debug console with all logs -->
         <div class="debug-console">
-            <div class="title">🔍 Debug Console - Complete Page Generation Log</div>
+            <div class="title">🔍 Debug Console - Complete Auth Testing Log</div>
             <div class="info">═════════════════════════════════════════════════════════════════</div>
             <div class="info">Context Name: ${escapeHtml(contextName)}</div>
             <div class="info">Context ID: ${escapeHtml(contextId)}</div>
@@ -436,7 +468,7 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             <div class="info">Generated: ${new Date().toISOString()}</div>
             <div class="info">API Base: ${HEYGEN_API_BASE}</div>
             <div class="info">═════════════════════════════════════════════════════════════════</div>
-            <div class="info"><strong>Full Debug Logs:</strong></div>
+            <div class="info"><strong>Auth Testing Logs (v3 - Tests multiple methods):</strong></div>
             ${debugLogs.map(log => {
                 let className = 'info';
                 if (log.includes('[ERROR]')) className = 'error';
@@ -461,9 +493,6 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
-/**
- * Send email notification
- */
 async function sendEmailNotification(email, contextName, pageUrl, metadata) {
     try {
         addDebugLog(`Sending email to: ${email}`, 'info');
@@ -480,30 +509,8 @@ async function sendEmailNotification(email, contextName, pageUrl, metadata) {
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                     <h2 style="color: #3d2314;">🎉 Your Avatar Page Has Been Created!</h2>
-                    
-                    <p>Hello,</p>
-                    
-                    <p>Your avatar context <strong>${escapeHtml(contextName)}</strong> has been successfully processed and is now live!</p>
-                    
-                    <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                        <h3 style="color: #FFD700;">📄 Page Details</h3>
-                        <p><strong>Context Name:</strong> ${escapeHtml(contextName)}</p>
-                        <p><strong>Page URL:</strong> <a href="${pageUrl}" style="color: #FFD700;">${pageUrl}</a></p>
-                        <p><strong>Created:</strong> ${new Date().toLocaleString()}</p>
-                    </div>
-                    
-                    <p>
-                        <a href="${pageUrl}" style="display: inline-block; background: #FFD700; color: #3d2314; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">
-                            View Your Avatar Page →
-                        </a>
-                    </p>
-                    
-                    <hr style="border: none; border-top: 2px solid #FFD700; margin: 30px 0;">
-                    
-                    <p style="font-size: 0.9rem; color: #666;">
-                        Generated by <strong>Avatar Agentic AI Pte Ltd.</strong><br>
-                        Contact: support@avataragentic.com
-                    </p>
+                    <p>Your avatar context <strong>${escapeHtml(contextName)}</strong> is now live!</p>
+                    <p><a href="${pageUrl}" style="display: inline-block; background: #FFD700; color: #3d2314; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Your Avatar Page →</a></p>
                 </div>
             `
         };
@@ -522,14 +529,11 @@ function logPageMetadata(metadata) {
     fs.appendFileSync(path.join(logDir, 'pages-generated.jsonl'), JSON.stringify(metadata) + '\n');
 }
 
-/**
- * GET /api/health
- */
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
         service: 'Agentic Avatar AI',
-        version: 'v2',
+        version: 'v3',
         timestamp: new Date().toISOString(),
         heygen_api: HEYGEN_API_KEY ? '✅ Configured' : '❌ Missing',
         email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured',
@@ -537,10 +541,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-/**
- * GET /api/debug
- * View all debug logs
- */
 app.get('/api/debug', (req, res) => {
     res.json({
         debug_logs: debugLogs,
@@ -549,9 +549,6 @@ app.get('/api/debug', (req, res) => {
     });
 });
 
-/**
- * GET /
- */
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'form-page.html'));
 });
@@ -562,7 +559,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-    addDebugLog(`🤖 Agentic Avatar AI Backend v2 running on port ${PORT}`, 'success');
+    addDebugLog(`🤖 Agentic Avatar AI Backend v3 running on port ${PORT}`, 'success');
     addDebugLog(`Environment: ${process.env.NODE_ENV || 'development'}`, 'info');
-    addDebugLog(`Using Bearer token authentication for HeyGen API`, 'info');
+    addDebugLog(`Testing multiple auth methods to find correct one`, 'info');
 });
