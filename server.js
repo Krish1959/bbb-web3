@@ -311,7 +311,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'form-page.html'));
+    res.sendFile(path.join(__dirname, 'form-page.html'));
 });
 
 app.use((err, req, res, next) => {
