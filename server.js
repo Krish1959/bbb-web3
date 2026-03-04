@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 const { v4: uuidv4 } = require('uuid');
+const nodemailer = require('nodemailer');
 
 dotenv.config();
 
@@ -14,49 +15,96 @@ const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY;
 const HEYGEN_API_BASE = process.env.HEYGEN_API_BASE || 'https://api.liveavatar.com';
 const RENDER_DOMAIN = process.env.RENDER_DOMAIN || 'localhost:3000';
 
+// Debug logging array
+const debugLogs = [];
+
+function addDebugLog(message, type = 'info') {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+    console.log(logEntry);
+    debugLogs.push(logEntry);
+    // Keep last 100 logs
+    if (debugLogs.length > 100) debugLogs.shift();
+}
+
+// Email transporter setup
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.SMTP_USER || 'agentic.avai@gmail.com',
+        pass: process.env.SMTP_PASS || ''
+    }
+});
+
+// Test email connection
+transporter.verify((error, success) => {
+    if (error) {
+        addDebugLog(`❌ Email service error: ${error.message}`, 'error');
+    } else {
+        addDebugLog('✅ Email service ready', 'success');
+    }
+});
+
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static('public'));
-app.use(express.static('generated-pages'));
+app.use(express.static('.'));
 
 /**
  * POST /api/create-avatar-page
- * Main endpoint: Receives form data, fetches HeyGen context, generates static page
+ * Main endpoint for creating avatar pages
  */
 app.post('/api/create-avatar-page', async (req, res) => {
     try {
+        addDebugLog('--- NEW REQUEST ---', 'info');
         const { contextName, contextId, iframeScript, email } = req.body;
 
+        // Validation
         if (!contextName || !contextId || !iframeScript || !email) {
-            return res.status(400).json({ message: 'Missing required fields' });
+            const error = 'Missing required fields';
+            addDebugLog(error, 'error');
+            return res.status(400).json({ message: error });
         }
 
-        console.log(`[${new Date().toISOString()}] Processing: ${contextName}`);
+        addDebugLog(`Processing: ${contextName}`, 'info');
+        addDebugLog(`API Key present: ${HEYGEN_API_KEY ? '✅ Yes' : '❌ No'}`, 'info');
 
         // Fetch context from HeyGen API
         let contextData;
         try {
+            addDebugLog(`Fetching from HeyGen: ${contextId}`, 'info');
             contextData = await fetchHeyGenContext(contextId);
+            addDebugLog(`✅ HeyGen fetch successful`, 'success');
         } catch (error) {
-            console.error('HeyGen API Error:', error.message);
+            addDebugLog(`❌ HeyGen API Error: ${error.message}`, 'error');
             return res.status(400).json({ 
                 message: 'Failed to fetch context from HeyGen API',
-                error: error.message 
+                error: error.message,
+                debug: debugLogs
             });
         }
 
         // Generate static HTML page
         const pageSlug = contextName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const pageUrl = `${RENDER_DOMAIN}/avatars/${pageSlug}.html`;
-        const htmlContent = generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug });
+        
+        addDebugLog(`Generating page: ${pageSlug}`, 'info');
+        const htmlContent = generateAvatarPage({
+            contextName,
+            contextId,
+            iframeScript,
+            contextData,
+            email,
+            pageSlug
+        });
 
         // Save to file system
-        const outputDir = path.join(__dirname, 'generated-pages', 'avatars');
+        const outputDir = path.join(__dirname, 'avatars');
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
 
         const filePath = path.join(outputDir, `${pageSlug}.html`);
         fs.writeFileSync(filePath, htmlContent);
+        addDebugLog(`✅ Page saved: ${filePath}`, 'success');
 
         // Log metadata
         const metadata = {
@@ -70,45 +118,73 @@ app.post('/api/create-avatar-page', async (req, res) => {
         };
 
         logPageMetadata(metadata);
-        triggerAgenticWorkflow(metadata);
 
-        res.status(200).json({ success: true, message: 'Avatar page created', pageUrl, metadata });
+        // Send email notification
+        await sendEmailNotification(email, contextName, pageUrl, metadata);
+
+        addDebugLog(`✅ All tasks completed`, 'success');
+
+        res.status(200).json({
+            success: true,
+            message: 'Avatar page created successfully',
+            pageUrl,
+            metadata,
+            debug: debugLogs
+        });
 
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ message: 'Internal server error', error: error.message });
+        addDebugLog(`❌ Unexpected error: ${error.message}`, 'error');
+        res.status(500).json({ 
+            message: 'Internal server error',
+            error: error.message,
+            debug: debugLogs
+        });
     }
 });
 
-// Fetch context from HeyGen API
+/**
+ * Fetch context from HeyGen API
+ */
 async function fetchHeyGenContext(contextId) {
     try {
-        const response = await axios.get(
-            `${HEYGEN_API_BASE}/v1/contexts/${contextId}`,
-            {
-                headers: {
-                    'X-API-Key': HEYGEN_API_KEY,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
+        const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
+        addDebugLog(`Making API call to: ${url}`, 'info');
+        
+        const response = await axios.get(url, {
+            headers: {
+                'X-API-Key': HEYGEN_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+
+        addDebugLog(`API Response status: ${response.status}`, 'info');
+
+        if (!response.data) {
+            throw new Error('No data in response');
+        }
 
         return {
-            id: response.data.id,
-            name: response.data.name,
+            id: response.data.id || contextId,
+            name: response.data.name || 'Unnamed Context',
             description: response.data.description || '',
-            content: response.data.content || '',
+            content: response.data.content || response.data.description || 'Context content available',
             metadata: response.data.metadata || {}
         };
 
     } catch (error) {
+        addDebugLog(`API Error Details:`, 'error');
+        addDebugLog(`  Status: ${error.response?.status || 'Unknown'}`, 'error');
+        addDebugLog(`  Message: ${error.response?.data?.message || error.message}`, 'error');
         throw new Error(`HeyGen API Error: ${error.response?.data?.message || error.message}`);
     }
 }
 
-// Generate HTML page
+/**
+ * Generate HTML page
+ */
 function generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug }) {
-    const contextText = (contextData.content || contextData.description || 'Content unavailable').substring(0, 500);
+    const contextText = (contextData.content || 'Context content available').substring(0, 500);
     const references = extractUrls(contextData.content || '');
 
     return `<!DOCTYPE html>
@@ -240,6 +316,25 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             color: #333;
         }
 
+        .debug-console {
+            background: #1a1a1a;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            margin-top: 30px;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 2px solid #FFD700;
+        }
+
+        .debug-console .info { color: #0f0; }
+        .debug-console .error { color: #f00; }
+        .debug-console .success { color: #0f0; }
+        .debug-console .warning { color: #ff0; }
+
         @media (max-width: 1024px) {
             .content-wrapper { grid-template-columns: 1fr; }
             .references ul { columns: 1; }
@@ -273,6 +368,16 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             <p>Generated by <strong>Avatar Agentic AI Pte Ltd.</strong> | Page: ${pageSlug}</p>
             <p>Created: ${new Date().toLocaleString()} | Contact: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
         </div>
+
+        <div class="debug-console" id="debugConsole">
+            <div class="info">Debug Console - Page Generation Details</div>
+            <div class="info">=====================================</div>
+            <div class="info">Context Name: ${escapeHtml(contextName)}</div>
+            <div class="info">Context ID: ${escapeHtml(contextId)}</div>
+            <div class="info">Page Slug: ${pageSlug}</div>
+            <div class="info">Generated: ${new Date().toISOString()}</div>
+            <div class="info">API Base: ${HEYGEN_API_BASE}</div>
+        </div>
     </div>
 </body>
 </html>`;
@@ -289,36 +394,106 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
+/**
+ * Send email notification
+ */
+async function sendEmailNotification(email, contextName, pageUrl, metadata) {
+    try {
+        addDebugLog(`Sending email to: ${email}`, 'info');
+
+        if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+            addDebugLog(`⚠️ Email credentials not configured`, 'warning');
+            return;
+        }
+
+        const mailOptions = {
+            from: process.env.SMTP_FROM || 'agentic.avai@gmail.com',
+            to: email,
+            subject: `✅ Your Avatar Page is Ready! - ${contextName}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #3d2314;">🎉 Your Avatar Page Has Been Created!</h2>
+                    
+                    <p>Hello,</p>
+                    
+                    <p>Your avatar context <strong>${escapeHtml(contextName)}</strong> has been successfully processed and is now live!</p>
+                    
+                    <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <h3 style="color: #FFD700;">📄 Page Details</h3>
+                        <p><strong>Context Name:</strong> ${escapeHtml(contextName)}</p>
+                        <p><strong>Page URL:</strong> <a href="${pageUrl}" style="color: #FFD700;">${pageUrl}</a></p>
+                        <p><strong>Created:</strong> ${new Date().toLocaleString()}</p>
+                    </div>
+                    
+                    <p>
+                        <a href="${pageUrl}" style="display: inline-block; background: #FFD700; color: #3d2314; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">
+                            View Your Avatar Page →
+                        </a>
+                    </p>
+                    
+                    <hr style="border: none; border-top: 2px solid #FFD700; margin: 30px 0;">
+                    
+                    <p style="font-size: 0.9rem; color: #666;">
+                        Generated by <strong>Avatar Agentic AI Pte Ltd.</strong><br>
+                        Contact: support@avataragentic.com
+                    </p>
+                </div>
+            `
+        };
+
+        await transporter.sendMail(mailOptions);
+        addDebugLog(`✅ Email sent successfully`, 'success');
+
+    } catch (error) {
+        addDebugLog(`❌ Email send failed: ${error.message}`, 'error');
+    }
+}
+
 function logPageMetadata(metadata) {
     const logDir = path.join(__dirname, 'logs');
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(path.join(logDir, 'pages-generated.jsonl'), JSON.stringify(metadata) + '\n');
 }
 
-function triggerAgenticWorkflow(metadata) {
-    const webhookUrl = process.env.AGENTIC_WEBHOOK_URL;
-    if (!webhookUrl) return;
-
-    axios.post(webhookUrl, {
-        event: 'avatar_page_created',
-        timestamp: new Date().toISOString(),
-        data: metadata
-    }).catch(error => console.error('Webhook error:', error.message));
-}
-
+/**
+ * GET /api/health
+ */
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', service: 'Agentic Avatar AI', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        service: 'Agentic Avatar AI',
+        timestamp: new Date().toISOString(),
+        heygen_api: HEYGEN_API_KEY ? '✅ Configured' : '❌ Missing',
+        email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured',
+        debug_logs: debugLogs.slice(-20)
+    });
 });
 
+/**
+ * GET /api/debug
+ * View all debug logs
+ */
+app.get('/api/debug', (req, res) => {
+    res.json({
+        debug_logs: debugLogs,
+        total_logs: debugLogs.length,
+        timestamp: new Date().toISOString()
+    });
+});
+
+/**
+ * GET /
+ */
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'form-page.html'));
 });
 
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    res.status(500).json({ message: 'Internal Server Error' });
+    addDebugLog(`Unhandled error: ${err.message}`, 'error');
+    res.status(500).json({ message: 'Internal Server Error', error: err.message });
 });
 
 app.listen(PORT, () => {
-    console.log(`🤖 Agentic Avatar AI Backend running on port ${PORT}`);
+    addDebugLog(`🤖 Agentic Avatar AI Backend running on port ${PORT}`, 'success');
+    addDebugLog(`Environment: ${process.env.NODE_ENV || 'development'}`, 'info');
 });
