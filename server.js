@@ -1,3 +1,6 @@
+// Server version _v2
+// Changes from v1: Fixed HeyGen API headers (Bearer token), improved debug logging with HTTP status codes
+
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
@@ -66,11 +69,12 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
         addDebugLog(`Processing: ${contextName}`, 'info');
         addDebugLog(`API Key present: ${HEYGEN_API_KEY ? '✅ Yes' : '❌ No'}`, 'info');
+        addDebugLog(`API Base URL: ${HEYGEN_API_BASE}`, 'info');
 
         // Fetch context from HeyGen API
         let contextData;
         try {
-            addDebugLog(`Fetching from HeyGen: ${contextId}`, 'info');
+            addDebugLog(`Fetching context from HeyGen API...`, 'info');
             contextData = await fetchHeyGenContext(contextId);
             addDebugLog(`✅ HeyGen fetch successful`, 'success');
         } catch (error) {
@@ -93,7 +97,8 @@ app.post('/api/create-avatar-page', async (req, res) => {
             iframeScript,
             contextData,
             email,
-            pageSlug
+            pageSlug,
+            debugLogs
         });
 
         // Save to file system
@@ -144,50 +149,70 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
 /**
  * Fetch context from HeyGen API
+ * FIX v2: Use correct Bearer token format per Gemini documentation
  */
 async function fetchHeyGenContext(contextId) {
     try {
         const url = `${HEYGEN_API_BASE}/v1/contexts/${contextId}`;
         addDebugLog(`Making API call to: ${url}`, 'info');
+        addDebugLog(`Using Authorization: Bearer [API_KEY]`, 'info');
         
         const response = await axios.get(url, {
             headers: {
-                'X-API-Key': HEYGEN_API_KEY,
-                'Content-Type': 'application/json'
+                'authorization': `Bearer ${HEYGEN_API_KEY}`,  // ✅ FIXED: Bearer token format
+                'accept': 'application/json'
             },
             timeout: 10000
         });
 
-        addDebugLog(`API Response status: ${response.status}`, 'info');
+        addDebugLog(`✅ API Response Status: ${response.status} ${response.statusText}`, 'success');
+        addDebugLog(`Response data keys: ${Object.keys(response.data).join(', ')}`, 'info');
 
         if (!response.data) {
             throw new Error('No data in response');
         }
 
+        // Extract context data
+        const contextContent = response.data.description || 
+                             response.data.content || 
+                             response.data.opening_intro ||
+                             'Context content available';
+
+        addDebugLog(`✅ Context content extracted (${contextContent.length} chars)`, 'success');
+
         return {
             id: response.data.id || contextId,
             name: response.data.name || 'Unnamed Context',
             description: response.data.description || '',
-            content: response.data.content || response.data.description || 'Context content available',
+            content: contextContent,
+            opening_intro: response.data.opening_intro || '',
+            urls: response.data.urls || [],
+            persona: response.data.persona || '',
             metadata: response.data.metadata || {}
         };
 
     } catch (error) {
-        addDebugLog(`API Error Details:`, 'error');
-        addDebugLog(`  Status: ${error.response?.status || 'Unknown'}`, 'error');
-        addDebugLog(`  Message: ${error.response?.data?.message || error.message}`, 'error');
-        throw new Error(`HeyGen API Error: ${error.response?.data?.message || error.message}`);
+        addDebugLog(`❌ API Error Details:`, 'error');
+        addDebugLog(`  Status Code: ${error.response?.status || 'Unknown'}`, 'error');
+        addDebugLog(`  Status Text: ${error.response?.statusText || 'Unknown'}`, 'error');
+        addDebugLog(`  Error Message: ${error.response?.data?.message || error.message}`, 'error');
+        addDebugLog(`  Full Response: ${JSON.stringify(error.response?.data || {})}`, 'error');
+        
+        throw new Error(`HeyGen API Error (${error.response?.status || '?'}): ${error.response?.data?.message || error.message}`);
     }
 }
 
 /**
  * Generate HTML page
+ * FIX v2: Improved layout (equal columns), better styling, full debug logs in page
  */
-function generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug }) {
-    const contextText = (contextData.content || 'Context content available').substring(0, 500);
+function generateAvatarPage({ contextName, contextId, iframeScript, contextData, email, pageSlug, debugLogs }) {
+    const contextText = (contextData.content || 'Context content available').substring(0, 800);
     const references = extractUrls(contextData.content || '');
 
     return `<!DOCTYPE html>
+<!-- form-page.html version _v2 -->
+<!-- Changes: Improved layout (equal columns), better avatar space, full debug logging -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -247,7 +272,13 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
 
         .container { max-width: 1400px; margin: 30px auto; padding: 20px; }
 
-        .content-wrapper { display: grid; grid-template-columns: 2fr 1fr; gap: 30px; margin-bottom: 30px; }
+        /* FIX v2: Equal 2-column layout for content + avatar */
+        .content-wrapper { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr;  /* ✅ FIXED: Equal columns instead of 2fr 1fr */
+            gap: 30px; 
+            margin-bottom: 30px; 
+        }
 
         .content-left {
             background: white;
@@ -270,27 +301,34 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             margin-bottom: 15px;
         }
 
+        /* FIX v2: Larger avatar container */
         .content-right {
             background: white;
             padding: 20px;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
+        /* FIX v2: Better iframe sizing */
         .content-right iframe {
             width: 100%;
-            height: 500px;
+            height: 600px;  /* ✅ FIXED: Increased from 500px to give more space */
             border: none;
             border-radius: 8px;
+            flex-grow: 1;
         }
 
+        /* FIX v2: Full width for references and metadata */
         .references {
             background: white;
             padding: 30px;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
             margin-top: 30px;
+            width: 100%;
         }
 
         .references h3 {
@@ -314,20 +352,31 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             border-radius: 8px;
             font-size: 0.85rem;
             color: #333;
+            width: 100%;
         }
 
+        /* FIX v2: Comprehensive debug console */
         .debug-console {
             background: #1a1a1a;
             color: #0f0;
-            padding: 15px;
+            padding: 20px;
             border-radius: 8px;
             font-family: 'Courier New', monospace;
-            font-size: 0.8rem;
-            line-height: 1.4;
+            font-size: 0.75rem;
+            line-height: 1.5;
             margin-top: 30px;
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
-            border: 2px solid #FFD700;
+            border: 3px solid #FFD700;
+            width: 100%;
+        }
+
+        .debug-console .title {
+            color: #FFD700;
+            font-weight: bold;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #FFD700;
+            padding-bottom: 10px;
         }
 
         .debug-console .info { color: #0f0; }
@@ -338,6 +387,12 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
         @media (max-width: 1024px) {
             .content-wrapper { grid-template-columns: 1fr; }
             .references ul { columns: 1; }
+            .content-right iframe { height: 450px; }
+        }
+
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2rem; }
+            .content-right iframe { height: 350px; }
         }
     </style>
 </head>
@@ -349,11 +404,13 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
     <div class="gold-divider"></div>
 
     <div class="container">
+        <!-- FIX v2: Equal column layout -->
         <div class="content-wrapper">
             <div class="content-left">
                 <h3>📚 Context Information</h3>
                 <p>${escapeHtml(contextText)}</p>
-                <p><strong>Context ID:</strong> ${escapeHtml(contextId)}</p>
+                <p><strong>Context ID:</strong> <code>${escapeHtml(contextId)}</code></p>
+                ${contextData.opening_intro ? `<p><strong>Intro:</strong> ${escapeHtml(contextData.opening_intro)}</p>` : ''}
             </div>
             <div class="content-right">
                 ${iframeScript}
@@ -369,14 +426,24 @@ function generateAvatarPage({ contextName, contextId, iframeScript, contextData,
             <p>Created: ${new Date().toLocaleString()} | Contact: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
         </div>
 
-        <div class="debug-console" id="debugConsole">
-            <div class="info">Debug Console - Page Generation Details</div>
-            <div class="info">=====================================</div>
+        <!-- FIX v2: Full debug console with all logs -->
+        <div class="debug-console">
+            <div class="title">🔍 Debug Console - Complete Page Generation Log</div>
+            <div class="info">═════════════════════════════════════════════════════════════════</div>
             <div class="info">Context Name: ${escapeHtml(contextName)}</div>
             <div class="info">Context ID: ${escapeHtml(contextId)}</div>
             <div class="info">Page Slug: ${pageSlug}</div>
             <div class="info">Generated: ${new Date().toISOString()}</div>
             <div class="info">API Base: ${HEYGEN_API_BASE}</div>
+            <div class="info">═════════════════════════════════════════════════════════════════</div>
+            <div class="info"><strong>Full Debug Logs:</strong></div>
+            ${debugLogs.map(log => {
+                let className = 'info';
+                if (log.includes('[ERROR]')) className = 'error';
+                if (log.includes('[SUCCESS]')) className = 'success';
+                if (log.includes('[WARNING]')) className = 'warning';
+                return `<div class="${className}">${escapeHtml(log)}</div>`;
+            }).join('')}
         </div>
     </div>
 </body>
@@ -462,6 +529,7 @@ app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
         service: 'Agentic Avatar AI',
+        version: 'v2',
         timestamp: new Date().toISOString(),
         heygen_api: HEYGEN_API_KEY ? '✅ Configured' : '❌ Missing',
         email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured',
@@ -494,6 +562,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-    addDebugLog(`🤖 Agentic Avatar AI Backend running on port ${PORT}`, 'success');
+    addDebugLog(`🤖 Agentic Avatar AI Backend v2 running on port ${PORT}`, 'success');
     addDebugLog(`Environment: ${process.env.NODE_ENV || 'development'}`, 'info');
+    addDebugLog(`Using Bearer token authentication for HeyGen API`, 'info');
 });
