@@ -1,4 +1,4 @@
-// Server version _v5
+// Server version _v6-FIX
 // UPDATED FOR DUAL AVATAR SUPPORT
 // Changes from v4:
 // - Support BOTH Old (Interactive Avatar) and New (Live Avatar) formats
@@ -137,7 +137,8 @@ app.post('/api/create-avatar-page', async (req, res) => {
             contextData,
             email,
             pageSlug,
-            debugLogs
+            debugLogs,
+            contextIdFormat
         });
 
         // Save to file system
@@ -243,7 +244,7 @@ async function fetchAvatarContext(contextId) {
  * Generate HTML page
  * v5: Supports both avatar types (modern iframe and legacy script)
  */
-function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, contextData, email, pageSlug, debugLogs }) {
+function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, contextData, email, pageSlug, debugLogs, contextIdFormat }) {
     const contextText = (contextData?.content || 'Context content available').substring(0, 1000);
     const references = contextData ? extractUrls(contextData.content || '') : [];
 
