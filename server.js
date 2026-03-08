@@ -1,4 +1,4 @@
-// Server version _v6.1
+// Server version _v6.5
 // UPDATED FOR DUAL AVATAR SUPPORT
 // Changes from v4:
 // - Support BOTH Old (Interactive Avatar) and New (Live Avatar) formats
@@ -108,9 +108,9 @@ app.post('/api/create-avatar-page', async (req, res) => {
         const contextIdFormat = detectContextIdFormat(contextId);
         addDebugLog(`Avatar Type Detected: ${avatarType} | Context ID Format: ${contextIdFormat}`, 'info');
 
-        // Fetch context from Avatar API (if API key is available)
+        // Fetch context from Avatar API (if API key is available AND context ID is UUID format)
         let contextData = null;
-        if (AVATAR_API_KEY) {
+        if (AVATAR_API_KEY && contextIdFormat === 'uuid') {
             try {
                 addDebugLog(`Fetching context from Avatar API...`, 'info');
                 contextData = await fetchAvatarContext(contextId);
@@ -119,6 +119,9 @@ app.post('/api/create-avatar-page', async (req, res) => {
                 addDebugLog(`⚠️ Avatar API Error (continuing anyway): ${error.message}`, 'warning');
                 contextData = null; // Continue without context data
             }
+        } else if (contextIdFormat === 'legacy') {
+            addDebugLog(`ℹ️ Legacy Context ID format detected - skipping API fetch (Knowledge Base IDs not supported in new API)`, 'info');
+            contextData = null;
         } else {
             addDebugLog(`⚠️ No API key configured - skipping context fetch`, 'warning');
             contextData = null;
