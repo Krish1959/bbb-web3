@@ -182,6 +182,14 @@
             margin-left: 2px;
         }
 
+        .format-note {
+            color: #1976d2;
+            font-size: 0.8rem;
+            margin-top: 4px;
+            margin-left: 2px;
+            font-weight: 500;
+        }
+
         .form-buttons {
             display: flex;
             gap: 15px;
@@ -339,23 +347,24 @@
                     type="text" 
                     id="contextId" 
                     name="contextId"
-                    placeholder="8976f997-ee48-4ae1-b1a1-75ac4bd72d7d"
-                    pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                    placeholder="e.g., 6c1a5496-737a-469b-9baf-55ee076f7686 or 04712c1a9a9a45a3827afa66927bee3c"
                     required
                 >
-                <div class="helper-text">UUID format (e.g., xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)</div>
+                <div class="helper-text">Unique identifier for your avatar context</div>
+                <div class="format-note">✓ Modern UUID format (with hyphens) or Legacy format (32 hex chars)</div>
             </div>
 
-            <!-- LiveAvatar iframe Script -->
+            <!-- Avatar Embedded Script -->
             <div class="form-group">
-                <label for="iframeScript" class="required">LiveAvatar Embed Script</label>
+                <label for="avatarScript" class="required">Avatar Embedded Script</label>
                 <textarea 
-                    id="iframeScript" 
-                    name="iframeScript"
-                    placeholder='<iframe src="https://embed.liveavatar.com/v1/5df6f78e-9420-4282-9686-ab3eab5f1538" allow="microphone" title="LiveAvatar Embed" style="aspect-ratio: 16/9;"></iframe>'
+                    id="avatarScript" 
+                    name="avatarScript"
+                    placeholder='Paste your avatar embed code here (iframe or script tag)'
                     required
                 ></textarea>
-                <div class="helper-text">Copy the complete iframe embed code from LiveAvatar</div>
+                <div class="helper-text">Copy the complete embed code from Avatar</div>
+                <div class="format-note">✓ Supports both Modern iframe and Legacy script formats</div>
             </div>
 
             <!-- Email -->
@@ -391,6 +400,25 @@
         const statusMessage = document.getElementById('statusMessage');
         const loading = document.getElementById('loading');
 
+        /**
+         * Validate Context ID - supports both old (32 chars hex) and new (UUID with hyphens) formats
+         */
+        function isValidContextId(id) {
+            // Modern UUID format with hyphens: 6c1a5496-737a-469b-9baf-55ee076f7686
+            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            // Legacy format without hyphens: 04712c1a9a9a45a3827afa66927bee3c (32 hex chars)
+            const legacyPattern = /^[0-9a-f]{32}$/i;
+            
+            return uuidPattern.test(id) || legacyPattern.test(id);
+        }
+
+        /**
+         * Validate avatar script - supports both <iframe> and <script> tags
+         */
+        function isValidAvatarScript(script) {
+            return script.includes('<iframe') || script.includes('<script');
+        }
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -402,13 +430,19 @@
             const formData = {
                 contextName: document.getElementById('contextName').value.trim(),
                 contextId: document.getElementById('contextId').value.trim(),
-                iframeScript: document.getElementById('iframeScript').value.trim(),
+                avatarScript: document.getElementById('avatarScript').value.trim(),
                 email: document.getElementById('email').value.trim()
             };
 
-            // Validate iframe contains proper script
-            if (!formData.iframeScript.includes('<iframe')) {
-                showError('Please provide a valid iframe embed script');
+            // Validate Context ID format
+            if (!isValidContextId(formData.contextId)) {
+                showError('Invalid Context ID format. Please enter a valid identifier (UUID or Legacy format).');
+                return;
+            }
+
+            // Validate avatar script
+            if (!isValidAvatarScript(formData.avatarScript)) {
+                showError('Please provide a valid avatar embedded script (iframe or script tag)');
                 return;
             }
 
@@ -457,9 +491,12 @@
             statusMessage.style.display = 'block';
         }
 
-        // Format UUID as user types
+        // Auto-format Context ID as user types (clean up spaces, lowercase, allow both formats)
         document.getElementById('contextId').addEventListener('input', (e) => {
-            let value = e.target.value.replace(/[^0-9a-f-]/gi, '').toLowerCase();
+            let value = e.target.value.replace(/\s/g, '').toLowerCase();
+            // Allow hyphens and hex characters
+            value = value.replace(/[^0-9a-f-]/gi, '');
+            // Limit to 36 chars (UUID with hyphens max)
             if (value.length > 36) {
                 value = value.slice(0, 36);
             }
