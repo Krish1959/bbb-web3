@@ -1,4 +1,4 @@
-// Server version _v6-FIX
+// Server version _v6.1
 // UPDATED FOR DUAL AVATAR SUPPORT
 // Changes from v4:
 // - Support BOTH Old (Interactive Avatar) and New (Live Avatar) formats
@@ -371,10 +371,11 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
         }
 
         .content-right {
-            min-height: 500px;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
+            position: relative;
+            min-height: 600px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         /* Handle both iframe and script embed styles */
@@ -383,16 +384,44 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
             height: 600px;
             border: none;
             border-radius: 8px;
-            flex-grow: 1;
         }
 
         .content-right script {
-            display: block;
-            width: 100%;
+            display: none;
         }
 
+        /* Override legacy script fixed positioning - make it fill container */
         #heygen-streaming-embed {
-            max-width: 100% !important;
+            position: relative !important;
+            left: auto !important;
+            bottom: auto !important;
+            width: 100% !important;
+            height: 100% !important;
+            border-radius: 8px !important;
+            min-height: 600px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* When expanded, keep it full size */
+        #heygen-streaming-embed.expand {
+            width: 100% !important;
+            height: 100% !important;
+            transform: none !important;
+            left: auto !important;
+            bottom: auto !important;
+            border-radius: 8px !important;
+        }
+
+        /* Style the container for legacy scripts */
+        #heygen-streaming-container {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        #heygen-streaming-embed.show {
+            opacity: 1 !important;
+            visibility: visible !important;
         }
 
         .references {
