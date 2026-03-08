@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Avatar Page Approval</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%);
+        }
+
+        /* Glittering dark brown header */
+        .header {
+            background: linear-gradient(135deg, #3d2314 0%, #5c3a2d 25%, #3d2314 50%, #5c3a2d 75%, #3d2314 100%);
+            background-size: 400% 400%;
+            animation: glitter 3s ease-in-out infinite;
+            padding: 40px 20px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 200%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                rgba(255, 215, 0, 0.1) 25%,
+                rgba(255, 215, 0, 0.3) 50%,
+                rgba(255, 215, 0, 0.1) 75%,
+                transparent 100%
+            );
+            animation: shimmer 2.5s infinite;
+        }
+
+        @keyframes glitter {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-50%); }
+            100% { transform: translateX(50%); }
+        }
+
+        .header h1 {
+            color: #FFD700;
+            font-size: 2.8rem;
+            font-weight: 700;
+            text-shadow: 
+                0 0 10px rgba(255, 215, 0, 0.5),
+                0 0 20px rgba(255, 215, 0, 0.3),
+                0 0 30px rgba(255, 215, 0, 0.2),
+                2px 2px 4px rgba(0, 0, 0, 0.5);
+            letter-spacing: 2px;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            color: rgba(255, 215, 0, 0.9);
+            font-size: 1rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .gold-divider {
+            height: 3px;
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(255, 215, 0, 0.3) 20%, 
+                rgba(255, 215, 0, 0.8) 50%, 
+                rgba(255, 215, 0, 0.3) 80%, 
+                transparent 100%
+            );
+        }
+
+        /* Form container */
+        .container {
+            max-width: 700px;
+            margin: 40px auto;
+            padding: 40px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            animation: slideUp 0.6s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .form-title {
+            color: #3d2314;
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .form-subtitle {
+            color: #666;
+            font-size: 0.95rem;
+            text-align: center;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            color: #3d2314;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+
+        .required::after {
+            content: ' *';
+            color: #d32f2f;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 120px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #FFD700;
+            box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.1);
+            background-color: #fffef5;
+        }
+
+        .form-group input::placeholder,
+        .form-group textarea::placeholder {
+            color: #999;
+        }
+
+        .helper-text {
+            color: #666;
+            font-size: 0.85rem;
+            margin-top: 6px;
+            margin-left: 2px;
+        }
+
+        .format-note {
+            color: #1976d2;
+            font-size: 0.8rem;
+            margin-top: 4px;
+            margin-left: 2px;
+            font-weight: 500;
+        }
+
+        .form-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 35px;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 40px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-submit {
+            background: linear-gradient(135deg, #FFD700 0%, #FFC700 100%);
+            color: #3d2314;
+            flex: 1;
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 215, 0, 0.3);
+        }
+
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+
+        .btn-clear {
+            background: #e0e0e0;
+            color: #333;
+            flex: 1;
+        }
+
+        .btn-clear:hover {
+            background: #d0d0d0;
+        }
+
+        .status-message {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 6px;
+            display: none;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .status-message.success {
+            background: #c8e6c9;
+            color: #2e7d32;
+            border-left: 4px solid #2e7d32;
+            display: block;
+        }
+
+        .status-message.error {
+            background: #ffcdd2;
+            color: #c62828;
+            border-left: 4px solid #c62828;
+            display: block;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            color: #FFD700;
+            margin-top: 15px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 215, 0, 0.2);
+            border-top: 3px solid #FFD700;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 20px 15px;
+                padding: 25px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .form-buttons {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>Agentic Avatar Page Approval</h1>
+        <p>by Avatar Agentic AI Pte Ltd.</p>
+    </header>
+    <div class="gold-divider"></div>
+
+    <div class="container">
+        <h2 class="form-title">Create Avatar Context</h2>
+        <p class="form-subtitle">Configure your agentic AI avatar context</p>
+
+        <form id="contextForm">
+            <!-- Context Name -->
+            <div class="form-group">
+                <label for="contextName" class="required">Context Name</label>
+                <input 
+                    type="text" 
+                    id="contextName" 
+                    name="contextName"
+                    placeholder="e.g., FinanceBot_v2, CustomerServiceAI"
+                    pattern="[a-zA-Z0-9_\-!@#$%^&*().]*"
+                    required
+                >
+                <div class="helper-text">Alphanumeric string with special characters allowed</div>
+            </div>
+
+            <!-- Context ID -->
+            <div class="form-group">
+                <label for="contextId" class="required">Context ID</label>
+                <input 
+                    type="text" 
+                    id="contextId" 
+                    name="contextId"
+                    placeholder="e.g., 6c1a5496-737a-469b-9baf-55ee076f7686 or 04712c1a9a9a45a3827afa66927bee3c"
+                    required
+                >
+                <div class="helper-text">Unique identifier for your avatar context</div>
+                <div class="format-note">✓ Modern UUID format (with hyphens) or Legacy format (32 hex chars)</div>
+            </div>
+
+            <!-- Avatar Embedded Script -->
+            <div class="form-group">
+                <label for="avatarScript" class="required">Avatar Embedded Script</label>
+                <textarea 
+                    id="avatarScript" 
+                    name="avatarScript"
+                    placeholder='Paste your avatar embed code here (iframe or script tag)'
+                    required
+                ></textarea>
+                <div class="helper-text">Copy the complete embed code from Avatar</div>
+                <div class="format-note">✓ Supports both Modern iframe and Legacy script formats</div>
+            </div>
+
+            <!-- Email -->
+            <div class="form-group">
+                <label for="email" class="required">Email</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email"
+                    placeholder="your.email@company.com"
+                    required
+                >
+                <div class="helper-text">For notifications and page access</div>
+            </div>
+
+            <!-- Form Actions -->
+            <div class="form-buttons">
+                <button type="submit" class="btn-submit">Submit</button>
+                <button type="reset" class="btn-clear">Clear Form</button>
+            </div>
+
+            <!-- Status Messages -->
+            <div id="statusMessage" class="status-message"></div>
+            <div class="loading" id="loading">
+                <span class="spinner"></span>
+                <span>Creating your avatar page...</span>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        const form = document.getElementById('contextForm');
+        const statusMessage = document.getElementById('statusMessage');
+        const loading = document.getElementById('loading');
+
+        /**
+         * Validate Context ID - supports both old (32 chars hex) and new (UUID with hyphens) formats
+         */
+        function isValidContextId(id) {
+            // Modern UUID format with hyphens: 6c1a5496-737a-469b-9baf-55ee076f7686
+            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            // Legacy format without hyphens: 04712c1a9a9a45a3827afa66927bee3c (32 hex chars)
+            const legacyPattern = /^[0-9a-f]{32}$/i;
+            
+            return uuidPattern.test(id) || legacyPattern.test(id);
+        }
+
+        /**
+         * Validate avatar script - supports both <iframe> and <script> tags
+         */
+        function isValidAvatarScript(script) {
+            return script.includes('<iframe') || script.includes('<script');
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Clear previous messages
+            statusMessage.style.display = 'none';
+            statusMessage.className = 'status-message';
+
+            // Get form data
+            const formData = {
+                contextName: document.getElementById('contextName').value.trim(),
+                contextId: document.getElementById('contextId').value.trim(),
+                avatarScript: document.getElementById('avatarScript').value.trim(),
+                email: document.getElementById('email').value.trim()
+            };
+
+            // Validate Context ID format
+            if (!isValidContextId(formData.contextId)) {
+                showError('Invalid Context ID format. Please enter a valid identifier (UUID or Legacy format).');
+                return;
+            }
+
+            // Validate avatar script
+            if (!isValidAvatarScript(formData.avatarScript)) {
+                showError('Please provide a valid avatar embedded script (iframe or script tag)');
+                return;
+            }
+
+            // Show loading
+            loading.classList.add('show');
+
+            try {
+                const response = await fetch('/api/create-avatar-page', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                loading.classList.remove('show');
+
+                if (response.ok) {
+                    const result = await response.json();
+                    showSuccess(`✓ Avatar page created successfully! Redirecting...`);
+                    // Reset form after success
+                    form.reset();
+                    // Redirect after 2 seconds
+                    setTimeout(() => {
+                        window.location.href = result.pageUrl;
+                    }, 2000);
+                } else {
+                    const error = await response.json();
+                    showError(`Error: ${error.message || 'Failed to create page'}`);
+                }
+            } catch (err) {
+                loading.classList.remove('show');
+                showError(`Network error: ${err.message}`);
+            }
+        });
+
+        function showSuccess(message) {
+            statusMessage.className = 'status-message success';
+            statusMessage.textContent = message;
+            statusMessage.style.display = 'block';
+        }
+
+        function showError(message) {
+            statusMessage.className = 'status-message error';
+            statusMessage.textContent = message;
+            statusMessage.style.display = 'block';
+        }
+
+        // Auto-format Context ID as user types (clean up spaces, lowercase, allow both formats)
+        document.getElementById('contextId').addEventListener('input', (e) => {
+            let value = e.target.value.replace(/\s/g, '').toLowerCase();
+            // Allow hyphens and hex characters
+            value = value.replace(/[^0-9a-f-]/gi, '');
+            // Limit to 36 chars (UUID with hyphens max)
+            if (value.length > 36) {
+                value = value.slice(0, 36);
+            }
+            e.target.value = value;
+        });
+    </script>
+</body>
+</html>
