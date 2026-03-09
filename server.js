@@ -1,7 +1,6 @@
-// Server version _v5.1(Ver 7)
-// FIXED AVATAR RENDERING - Following Manual Fix Template
-// Key Change: Inject avatars directly into container, not to document.body
-// This prevents double avatars and floating popups
+// Server version _v7.5
+// FIXED: Proper script execution + Two-column layout
+// Left column: blank, Right column: avatar with talking capability
 
 const express = require('express');
 const axios = require('axios');
@@ -53,7 +52,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// Detect avatar type (modern iframe vs legacy script)
+// Detect avatar type
 function detectAvatarType(script) {
     if (script.includes('<iframe')) return 'modern';
     else if (script.includes('<script')) return 'legacy';
@@ -73,44 +72,22 @@ function detectContextIdFormat(contextId) {
     return 'unknown';
 }
 
-// Fetch context from Avatar API
-async function fetchAvatarContext(contextId) {
-    try {
-        const url = `${AVATAR_API_BASE}/v1/contexts/${contextId}`;
-        addDebugLog(`API Call: ${url}`, 'info');
-        
-        const response = await axios.get(url, {
-            headers: {
-                'X-API-Key': AVATAR_API_KEY,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-
-        const nestedData = response.data.data || response.data;
-        
-        return {
-            id: nestedData.id || contextId,
-            name: nestedData.name || 'Unnamed Context',
-            content: nestedData.content || nestedData.description || 'Context available',
-            opening_intro: nestedData.opening_intro || ''
-        };
-
-    } catch (error) {
-        throw new Error(`Avatar API Error: ${error.response?.data?.message || error.message}`);
-    }
-}
-
-// Extract URLs from content
-function extractUrls(content) {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return (content.match(urlRegex) || []).filter((url, idx, arr) => arr.indexOf(url) === idx);
-}
-
 // HTML escape
 function escapeHtml(text) {
     const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
     return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+// Extract script content from script tag
+function extractScriptContent(scriptTag) {
+    const match = scriptTag.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
+    return match ? match[1].trim() : scriptTag;
+}
+
+// Extract iframe src
+function extractIframeSrc(iframeTag) {
+    const match = iframeTag.match(/src=["']([^"']+)["']/i);
+    return match ? match[1] : '';
 }
 
 // CREATE AVATAR PAGE ENDPOINT
@@ -134,18 +111,7 @@ app.post('/api/create-avatar-page', async (req, res) => {
         const contextIdFormat = detectContextIdFormat(contextId);
         addDebugLog(`Avatar Type: ${avatarType} | Context ID Format: ${contextIdFormat}`, 'info');
 
-        // Fetch context only for UUID format
-        let contextData = null;
-        if (AVATAR_API_KEY && contextIdFormat === 'uuid') {
-            try {
-                addDebugLog(`Fetching context from API...`, 'info');
-                contextData = await fetchAvatarContext(contextId);
-                addDebugLog(`✅ API fetch successful`, 'success');
-            } catch (error) {
-                addDebugLog(`⚠️ API Error (continuing): ${error.message}`, 'warning');
-                contextData = null;
-            }
-        } else if (contextIdFormat === 'legacy') {
+        if (contextIdFormat === 'legacy') {
             addDebugLog(`ℹ️ Legacy format - skipping API fetch`, 'info');
         }
 
@@ -154,11 +120,22 @@ app.post('/api/create-avatar-page', async (req, res) => {
         const pageUrl = `${RENDER_DOMAIN}/avatars/${pageSlug}.html`;
 
         addDebugLog(`Generating page: ${pageSlug}`, 'info');
+        
+        // Extract script/iframe for proper injection
+        let avatarContent = '';
+        if (avatarType === 'modern') {
+            const iframeSrc = extractIframeSrc(avatarScript);
+            avatarContent = iframeSrc;
+        } else if (avatarType === 'legacy') {
+            const scriptContent = extractScriptContent(avatarScript);
+            avatarContent = scriptContent;
+        }
+
         const htmlContent = generateAvatarPage({
             contextName,
             contextId,
-            avatarScript,
             avatarType,
+            avatarContent,
             email,
             pageSlug,
             debugLogs
@@ -196,7 +173,7 @@ app.post('/api/create-avatar-page', async (req, res) => {
 });
 
 // GENERATE AVATAR PAGE FUNCTION
-function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, email, pageSlug, debugLogs }) {
+function generateAvatarPage({ contextName, contextId, avatarType, avatarContent, email, pageSlug, debugLogs }) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -219,6 +196,7 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
       flex-direction: column;
       font-family: 'Raleway', sans-serif;
       overflow-x: hidden;
+      background: #0D0D1A;
     }
 
     /* ─── Golden Colour Palette ─────────────────────────────────────────────── */
@@ -306,30 +284,32 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
       text-transform: uppercase;
     }
 
-    /* ─── AVATAR SECTION ──────────────────────────────────────────── */
-    .avatar-section {
+    /* ─── TWO COLUMN LAYOUT ───────────────────────────────────────── */
+    .content-wrapper {
       flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: clamp(2rem, 4vw, 3rem) 1rem;
-      background: var(--body-bg);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      padding: clamp(2rem, 4vw, 3rem);
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
     }
 
-    .avatar-label {
-      font-size: clamp(0.9rem, 2vw, 1.2rem);
-      color: var(--gold-mid);
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      margin-bottom: 1.5rem;
-      font-weight: 600;
+    .content-left {
+      /* LEFT COLUMN - BLANK AS REQUESTED */
+    }
+
+    .content-right {
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .avatar-card {
       width: 100%;
-      max-width: 800px;
       aspect-ratio: 16 / 9;
-      min-height: 400px;
+      min-height: 450px;
       border-radius: 12px;
       box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.12), 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 60px rgba(255, 215, 0, 0.08);
       background: #000;
@@ -343,6 +323,13 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
       border: 0;
     }
 
+    #avatar-wrapper {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    /* Gold corner accents */
     .avatar-card::before, .avatar-card::after {
       content: '';
       position: absolute;
@@ -368,24 +355,25 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
     /* Debug Console */
     .debug-console {
       width: 100%;
-      max-width: 900px;
-      margin-top: 2rem;
+      max-width: 1400px;
+      margin: 2rem auto;
+      padding: 0 clamp(2rem, 4vw, 3rem);
       background: #0a0a0a;
       border: 1px solid var(--gold-deep);
       border-radius: 8px;
       padding: 15px;
       font-family: 'Courier New', monospace;
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: #0f0;
-      max-height: 300px;
+      max-height: 250px;
       overflow-y: auto;
-      line-height: 1.4;
+      line-height: 1.3;
     }
 
     .debug-console .title {
       color: var(--gold-mid);
       font-weight: bold;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
 
     .debug-console .info { color: #0f0; }
@@ -403,8 +391,13 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
       opacity: 0.75;
     }
 
-    @media (min-width: 768px) {
-      .avatar-card { aspect-ratio: 16 / 9; }
+    @media (max-width: 768px) {
+      .content-wrapper {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        padding: 1rem;
+      }
+      .content-left { display: none; }
     }
   </style>
 </head>
@@ -424,26 +417,30 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
     <h2 class="sub-heading">${escapeHtml(contextName)}</h2>
   </section>
 
-  <!-- AVATAR SECTION -->
-  <section class="avatar-section" aria-label="Avatar demonstration">
-    <p class="avatar-label">${avatarType === 'modern' ? 'Live Avatar' : 'Interactive Avatar'}</p>
-    <div class="avatar-card" id="avatarCard">
-      <!-- Avatar will be injected here -->
+  <!-- TWO COLUMN LAYOUT -->
+  <section class="content-wrapper">
+    <div class="content-left">
+      <!-- LEFT COLUMN - BLANK (as requested) -->
+    </div>
+    
+    <div class="content-right">
+      <div class="avatar-card" id="avatarCard">
+        <!-- Avatar injected here -->
+      </div>
     </div>
   </section>
 
   <!-- DEBUG CONSOLE -->
   <div class="debug-console">
-    <div class="title">✅ Debug Console - v5.1</div>
+    <div class="title">✅ Debug Console - v5.2 - TWO COLUMN LAYOUT</div>
     <div class="info">Avatar Type: ${avatarType}</div>
-    <div class="info">Context ID Format: ${detectContextIdFormat(contextId)}</div>
     <div class="info">Context: ${escapeHtml(contextName)}</div>
     <div class="info">Page: ${pageSlug}</div>
     ${debugLogs.map(log => {
-        if (log.includes('[SUCCESS]')) return `<div class="success">${escapeHtml(log)}</div>`;
-        if (log.includes('[ERROR]')) return `<div class="error">${escapeHtml(log)}</div>`;
-        if (log.includes('[WARNING]')) return `<div class="warning">${escapeHtml(log)}</div>`;
-        return `<div class="info">${escapeHtml(log)}</div>`;
+        if (log.includes('[SUCCESS]')) return '<div class="success">' + escapeHtml(log) + '</div>';
+        if (log.includes('[ERROR]')) return '<div class="error">' + escapeHtml(log) + '</div>';
+        if (log.includes('[WARNING]')) return '<div class="warning">' + escapeHtml(log) + '</div>';
+        return '<div class="info">' + escapeHtml(log) + '</div>';
     }).join('')}
   </div>
 
@@ -495,12 +492,10 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
       function animate() {
         ctx.fillStyle = 'rgba(13, 5, 0, 0.2)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
         stars.forEach(star => {
           star.update();
           star.draw();
         });
-
         requestAnimationFrame(animate);
       }
 
@@ -518,35 +513,45 @@ function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, 
   <!-- AVATAR INJECTION -->
   <script>
     const card = document.getElementById('avatarCard');
-    ${avatarType === 'modern' 
-      ? `// Modern Avatar (iframe)
+    
+    ${avatarType === 'modern' ? `
+      // MODERN AVATAR - iframe injection
       const iframe = document.createElement('iframe');
-      iframe.src = '${escapeHtml(avatarScript.match(/src="([^"]+)"/)?.[1] || '')}';
+      iframe.src = '${escapeHtml(avatarContent)}';
       iframe.title = '${escapeHtml(contextName)} Avatar';
       iframe.allow = 'microphone; camera; autoplay; fullscreen';
       iframe.allowFullscreen = true;
-      card.appendChild(iframe);`
-      : `// Legacy Avatar (script)
+      card.appendChild(iframe);
+    ` : `
+      // LEGACY AVATAR - script execution with appendChild interception
       const wrapper = document.createElement('div');
       wrapper.id = 'avatar-wrapper';
       wrapper.style.width = '100%';
       wrapper.style.height = '100%';
       wrapper.style.position = 'relative';
       card.appendChild(wrapper);
-      
-      // Temporarily replace document.body.appendChild to inject into wrapper
-      const originalAppendChild = wrapper.appendChild.bind(wrapper);
+
+      // Store original appendChild
       const bodyAppendChild = document.body.appendChild;
+      const wrapperAppendChild = wrapper.appendChild.bind(wrapper);
+
+      // Override document.body.appendChild to intercept heygen element
       document.body.appendChild = function(element) {
         if (element.id === 'heygen-streaming-embed') {
-          return originalAppendChild(element);
+          console.log('Intercepting heygen element - injecting to wrapper');
+          return wrapperAppendChild(element);
         }
-        return bodyAppendChild(element);
+        return bodyAppendChild.call(document.body, element);
       };
-      
-      ${avatarScript}
-      
-      document.body.appendChild = bodyAppendChild;`}
+
+      // Execute the legacy avatar script
+      (function() {
+        ${avatarContent}
+      })();
+
+      // Restore original appendChild
+      document.body.appendChild = bodyAppendChild;
+    `}
   </script>
 
 </body>
@@ -563,7 +568,6 @@ async function sendEmailNotification(email, contextName, pageUrl) {
             <h2>Your Avatar Page is Ready!</h2>
             <p>Your avatar page for <strong>${escapeHtml(contextName)}</strong> has been created successfully.</p>
             <p><a href="${escapeHtml(pageUrl)}" style="background-color: #FFD700; padding: 10px 20px; text-decoration: none; color: black;">View Your Avatar</a></p>
-            <p>Share this link with others to showcase your interactive avatar.</p>
         `
     };
 
@@ -582,7 +586,7 @@ app.get('/avatars/:slug.html', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`✅ Avatar Agentic AI v5.1 running on port ${PORT}`);
+    console.log(`✅ Avatar Agentic AI v5.2 running on port ${PORT}`);
 });
 
 module.exports = app;
