@@ -1,13 +1,12 @@
-// Server version _v7.5
-// FIXED: Proper script execution + Two-column layout
-// Left column: blank, Right column: avatar with talking capability
+// Server version _v5.8 (ver 8)
+// FINAL VERSION: Avatar working + Layout CORRECTED
+// Left column: Avatar card container (placeholder shows here)
+// Right column: Debug console (safe from popup masking)
 
 const express = require('express');
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
-const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 
 dotenv.config();
@@ -18,10 +17,7 @@ app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 3000;
 const RENDER_DOMAIN = process.env.RENDER_DOMAIN || 'http://localhost:3000';
-const AVATAR_API_KEY = process.env.HEYGEN_API_KEY || process.env.AVATAR_API_KEY;
-const AVATAR_API_BASE = process.env.HEYGEN_API_BASE || process.env.AVATAR_API_BASE || 'https://api.liveavatar.com';
 
-// Email Configuration
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -30,7 +26,6 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Debug logging
 let debugLogs = [];
 function addDebugLog(message, type = 'info') {
     const timestamp = new Date().toISOString();
@@ -39,58 +34,45 @@ function addDebugLog(message, type = 'info') {
     console.log(logEntry);
 }
 
-// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Form page
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'form-page.html'));
 });
 
-// Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', message: 'Server is running' });
+    res.json({ status: 'ok' });
 });
 
-// Detect avatar type
 function detectAvatarType(script) {
     if (script.includes('<iframe')) return 'modern';
     else if (script.includes('<script')) return 'legacy';
     return 'unknown';
 }
 
-// Detect context ID format
 function detectContextIdFormat(contextId) {
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const legacyPattern = /^[0-9a-f]{32}$/i;
-    
-    if (uuidPattern.test(contextId)) {
-        return 'uuid';
-    } else if (legacyPattern.test(contextId)) {
-        return 'legacy';
-    }
+    if (uuidPattern.test(contextId)) return 'uuid';
+    else if (legacyPattern.test(contextId)) return 'legacy';
     return 'unknown';
 }
 
-// HTML escape
-function escapeHtml(text) {
-    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return text.replace(/[&<>"']/g, m => map[m]);
-}
-
-// Extract script content from script tag
 function extractScriptContent(scriptTag) {
     const match = scriptTag.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
     return match ? match[1].trim() : scriptTag;
 }
 
-// Extract iframe src
 function extractIframeSrc(iframeTag) {
     const match = iframeTag.match(/src=["']([^"']+)["']/i);
     return match ? match[1] : '';
 }
 
-// CREATE AVATAR PAGE ENDPOINT
+function escapeHtml(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+
 app.post('/api/create-avatar-page', async (req, res) => {
     debugLogs = [];
     
@@ -99,36 +81,30 @@ app.post('/api/create-avatar-page', async (req, res) => {
         const { contextName, contextId, avatarScript, email } = req.body;
 
         if (!contextName || !contextId || !avatarScript || !email) {
-            const error = 'Missing required fields';
-            addDebugLog(error, 'error');
-            return res.status(400).json({ message: error });
+            addDebugLog('Missing required fields', 'error');
+            return res.status(400).json({ message: 'Missing required fields' });
         }
 
         addDebugLog(`Processing: ${contextName}`, 'info');
 
-        // Detect types
         const avatarType = detectAvatarType(avatarScript);
         const contextIdFormat = detectContextIdFormat(contextId);
         addDebugLog(`Avatar Type: ${avatarType} | Context ID Format: ${contextIdFormat}`, 'info');
 
         if (contextIdFormat === 'legacy') {
-            addDebugLog(`ℹ️ Legacy format - skipping API fetch`, 'info');
+            addDebugLog(`Info: Legacy format - skipping API fetch`, 'info');
         }
 
-        // Generate page
         const pageSlug = contextName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const pageUrl = `${RENDER_DOMAIN}/avatars/${pageSlug}.html`;
 
         addDebugLog(`Generating page: ${pageSlug}`, 'info');
         
-        // Extract script/iframe for proper injection
         let avatarContent = '';
         if (avatarType === 'modern') {
-            const iframeSrc = extractIframeSrc(avatarScript);
-            avatarContent = iframeSrc;
+            avatarContent = extractIframeSrc(avatarScript);
         } else if (avatarType === 'legacy') {
-            const scriptContent = extractScriptContent(avatarScript);
-            avatarContent = scriptContent;
+            avatarContent = extractScriptContent(avatarScript);
         }
 
         const htmlContent = generateAvatarPage({
@@ -136,12 +112,10 @@ app.post('/api/create-avatar-page', async (req, res) => {
             contextId,
             avatarType,
             avatarContent,
-            email,
             pageSlug,
             debugLogs
         });
 
-        // Save file
         const outputDir = path.join(__dirname, 'avatars');
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
@@ -149,11 +123,10 @@ app.post('/api/create-avatar-page', async (req, res) => {
 
         const filePath = path.join(outputDir, `${pageSlug}.html`);
         fs.writeFileSync(filePath, htmlContent);
-        addDebugLog(`✅ Page saved: ${filePath}`, 'success');
+        addDebugLog(`Page saved successfully`, 'success');
 
-        // Send email
         await sendEmailNotification(email, contextName, pageUrl);
-        addDebugLog(`✅ Email sent`, 'success');
+        addDebugLog(`Email sent to ${email}`, 'success');
 
         res.status(200).json({
             success: true,
@@ -163,17 +136,66 @@ app.post('/api/create-avatar-page', async (req, res) => {
         });
 
     } catch (error) {
-        addDebugLog(`❌ Error: ${error.message}`, 'error');
-        res.status(500).json({
-            message: 'Internal server error',
-            error: error.message,
-            debug: debugLogs
+        addDebugLog(`Error: ${error.message}`, 'error');
+        res.status(500).json({ 
+            message: 'Internal server error', 
+            error: error.message, 
+            debug: debugLogs 
         });
     }
 });
 
-// GENERATE AVATAR PAGE FUNCTION
-function generateAvatarPage({ contextName, contextId, avatarType, avatarContent, email, pageSlug, debugLogs }) {
+function generateAvatarPage({ contextName, contextId, avatarType, avatarContent, pageSlug, debugLogs }) {
+    
+    const debugHtml = debugLogs.map(log => {
+        if (log.includes('[SUCCESS]')) {
+            return '<div class="success">' + escapeHtml(log) + '</div>';
+        } else if (log.includes('[ERROR]')) {
+            return '<div class="error">' + escapeHtml(log) + '</div>';
+        } else if (log.includes('[WARNING]')) {
+            return '<div class="warning">' + escapeHtml(log) + '</div>';
+        } else {
+            return '<div class="info">' + escapeHtml(log) + '</div>';
+        }
+    }).join('');
+
+    let avatarScript = '';
+    if (avatarType === 'modern') {
+        avatarScript = `
+      const iframe = document.createElement('iframe');
+      iframe.src = '${escapeHtml(avatarContent)}';
+      iframe.title = '${escapeHtml(contextName)} Avatar';
+      iframe.allow = 'microphone; camera; autoplay; fullscreen';
+      iframe.allowFullscreen = true;
+      card.appendChild(iframe);
+        `;
+    } else {
+        avatarScript = `
+      const wrapper = document.createElement('div');
+      wrapper.id = 'avatar-wrapper';
+      wrapper.style.width = '100%';
+      wrapper.style.height = '100%';
+      wrapper.style.position = 'relative';
+      card.appendChild(wrapper);
+
+      const bodyAppendChild = document.body.appendChild;
+      const wrapperAppendChild = wrapper.appendChild.bind(wrapper);
+
+      document.body.appendChild = function(element) {
+        if (element.id === 'heygen-streaming-embed') {
+          return wrapperAppendChild(element);
+        }
+        return bodyAppendChild.call(document.body, element);
+      };
+
+      (function() {
+        ${avatarContent}
+      })();
+
+      document.body.appendChild = bodyAppendChild;
+        `;
+    }
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -181,13 +203,11 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Avatar Agentic AI – ${escapeHtml(contextName)}</title>
 
-  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600&family=Raleway:wght@400;600&display=swap" rel="stylesheet" />
 
   <style>
-    /* ─── Reset & Base ─────────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { font-size: clamp(14px, 1.5vw, 18px); }
     body {
@@ -199,7 +219,6 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       background: #0D0D1A;
     }
 
-    /* ─── Golden Colour Palette ─────────────────────────────────────────────── */
     :root {
       --gold-light:   #FFE066;
       --gold-mid:     #FFD700;
@@ -212,7 +231,6 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       --body-bg:      #0D0D1A;
     }
 
-    /* ─── HERO ───────────────────────────────────────────────────────── */
     .hero {
       position: relative;
       width: 100%;
@@ -268,7 +286,6 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       margin: 1rem 0 0 0;
     }
 
-    /* ─── SUBHERO ─────────────────────────────────────────────────── */
     .subhero {
       background: linear-gradient(135deg, var(--ocean-mid) 0%, var(--ocean-bright) 100%);
       padding: clamp(1.2rem, 3vw, 2rem) 1rem;
@@ -284,7 +301,6 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       text-transform: uppercase;
     }
 
-    /* ─── TWO COLUMN LAYOUT ───────────────────────────────────────── */
     .content-wrapper {
       flex: 1;
       display: grid;
@@ -297,13 +313,15 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
     }
 
     .content-left {
-      /* LEFT COLUMN - BLANK AS REQUESTED */
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .content-right {
       display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-direction: column;
+      justify-content: flex-start;
     }
 
     .avatar-card {
@@ -329,7 +347,6 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       position: relative;
     }
 
-    /* Gold corner accents */
     .avatar-card::before, .avatar-card::after {
       content: '';
       position: absolute;
@@ -352,12 +369,8 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       border-radius: 0 0 4px 0;
     }
 
-    /* Debug Console */
     .debug-console {
       width: 100%;
-      max-width: 1400px;
-      margin: 2rem auto;
-      padding: 0 clamp(2rem, 4vw, 3rem);
       background: #0a0a0a;
       border: 1px solid var(--gold-deep);
       border-radius: 8px;
@@ -365,7 +378,7 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       font-family: 'Courier New', monospace;
       font-size: 0.7rem;
       color: #0f0;
-      max-height: 250px;
+      max-height: 450px;
       overflow-y: auto;
       line-height: 1.3;
     }
@@ -395,15 +408,12 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
       .content-wrapper {
         grid-template-columns: 1fr;
         gap: 1rem;
-        padding: 1rem;
       }
-      .content-left { display: none; }
     }
   </style>
 </head>
 <body>
 
-  <!-- HERO -->
   <section class="hero" aria-label="Main heading">
     <canvas id="starCanvas" aria-hidden="true"></canvas>
     <div class="hero-content">
@@ -412,50 +422,37 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
     </div>
   </section>
 
-  <!-- SUB-HEADING -->
   <section class="subhero" aria-label="Sub-heading">
     <h2 class="sub-heading">${escapeHtml(contextName)}</h2>
   </section>
 
-  <!-- TWO COLUMN LAYOUT -->
   <section class="content-wrapper">
     <div class="content-left">
-      <!-- LEFT COLUMN - BLANK (as requested) -->
+      <div class="avatar-card" id="avatarCard"></div>
     </div>
     
     <div class="content-right">
-      <div class="avatar-card" id="avatarCard">
-        <!-- Avatar injected here -->
+      <div class="debug-console">
+        <div class="title">Debug Console - v5.8</div>
+        <div class="info">Avatar Type: ${avatarType}</div>
+        <div class="info">Context: ${escapeHtml(contextName)}</div>
+        <div class="info">Context ID Format: ${detectContextIdFormat(contextId)}</div>
+        <div class="info">Page: ${pageSlug}</div>
+        <div class="info">────────────────────────</div>
+        ${debugHtml}
       </div>
     </div>
   </section>
 
-  <!-- DEBUG CONSOLE -->
-  <div class="debug-console">
-    <div class="title">✅ Debug Console - v5.2 - TWO COLUMN LAYOUT</div>
-    <div class="info">Avatar Type: ${avatarType}</div>
-    <div class="info">Context: ${escapeHtml(contextName)}</div>
-    <div class="info">Page: ${pageSlug}</div>
-    ${debugLogs.map(log => {
-        if (log.includes('[SUCCESS]')) return '<div class="success">' + escapeHtml(log) + '</div>';
-        if (log.includes('[ERROR]')) return '<div class="error">' + escapeHtml(log) + '</div>';
-        if (log.includes('[WARNING]')) return '<div class="warning">' + escapeHtml(log) + '</div>';
-        return '<div class="info">' + escapeHtml(log) + '</div>';
-    }).join('')}
-  </div>
-
-  <!-- FOOTER -->
   <footer>
-    &copy; 2025 Avatar Agentic AI &nbsp;|&nbsp; Powered by Avatar Agentic AI Pte Ltd
+    &copy; 2025 Avatar Agentic AI | Powered by Avatar Agentic AI Pte Ltd
   </footer>
 
-  <!-- STAR ANIMATION -->
   <script>
     (function() {
       const canvas = document.getElementById('starCanvas');
       const ctx = canvas.getContext('2d');
       let stars = [];
-
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
 
@@ -468,14 +465,12 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
           this.twinkleSpeed = Math.random() * 0.03 + 0.01;
           this.twinkleDirection = 1;
         }
-
         update() {
           this.opacity += this.twinkleSpeed * this.twinkleDirection;
           if (this.opacity >= 1 || this.opacity <= 0.2) {
             this.twinkleDirection *= -1;
           }
         }
-
         draw() {
           ctx.fillStyle = 'rgba(255, 215, 0, ' + this.opacity + ')';
           ctx.fillRect(this.x, this.y, this.radius, this.radius);
@@ -510,71 +505,25 @@ function generateAvatarPage({ contextName, contextId, avatarType, avatarContent,
     })();
   </script>
 
-  <!-- AVATAR INJECTION -->
   <script>
     const card = document.getElementById('avatarCard');
-    
-    ${avatarType === 'modern' ? `
-      // MODERN AVATAR - iframe injection
-      const iframe = document.createElement('iframe');
-      iframe.src = '${escapeHtml(avatarContent)}';
-      iframe.title = '${escapeHtml(contextName)} Avatar';
-      iframe.allow = 'microphone; camera; autoplay; fullscreen';
-      iframe.allowFullscreen = true;
-      card.appendChild(iframe);
-    ` : `
-      // LEGACY AVATAR - script execution with appendChild interception
-      const wrapper = document.createElement('div');
-      wrapper.id = 'avatar-wrapper';
-      wrapper.style.width = '100%';
-      wrapper.style.height = '100%';
-      wrapper.style.position = 'relative';
-      card.appendChild(wrapper);
-
-      // Store original appendChild
-      const bodyAppendChild = document.body.appendChild;
-      const wrapperAppendChild = wrapper.appendChild.bind(wrapper);
-
-      // Override document.body.appendChild to intercept heygen element
-      document.body.appendChild = function(element) {
-        if (element.id === 'heygen-streaming-embed') {
-          console.log('Intercepting heygen element - injecting to wrapper');
-          return wrapperAppendChild(element);
-        }
-        return bodyAppendChild.call(document.body, element);
-      };
-
-      // Execute the legacy avatar script
-      (function() {
-        ${avatarContent}
-      })();
-
-      // Restore original appendChild
-      document.body.appendChild = bodyAppendChild;
-    `}
+    ${avatarScript}
   </script>
 
 </body>
 </html>`;
 }
 
-// Send email notification
 async function sendEmailNotification(email, contextName, pageUrl) {
     const mailOptions = {
         from: process.env.SMTP_FROM || 'noreply@avatarai.com',
         to: email,
         subject: `Avatar Page Created: ${contextName}`,
-        html: `
-            <h2>Your Avatar Page is Ready!</h2>
-            <p>Your avatar page for <strong>${escapeHtml(contextName)}</strong> has been created successfully.</p>
-            <p><a href="${escapeHtml(pageUrl)}" style="background-color: #FFD700; padding: 10px 20px; text-decoration: none; color: black;">View Your Avatar</a></p>
-        `
+        html: `<h2>Your Avatar Page is Ready!</h2><p>Your avatar page for <strong>${escapeHtml(contextName)}</strong> has been created.</p><p><a href="${escapeHtml(pageUrl)}">View Your Avatar</a></p>`
     };
-
     return transporter.sendMail(mailOptions);
 }
 
-// Serve generated avatar pages
 app.get('/avatars/:slug.html', (req, res) => {
     const filePath = path.join(__dirname, 'avatars', req.params.slug + '.html');
     if (fs.existsSync(filePath)) {
@@ -584,9 +533,8 @@ app.get('/avatars/:slug.html', (req, res) => {
     }
 });
 
-// Start server
 app.listen(PORT, () => {
-    console.log(`✅ Avatar Agentic AI v5.2 running on port ${PORT}`);
+    console.log(`✅ Avatar Agentic AI v5.8 running on port ${PORT}`);
 });
 
 module.exports = app;
