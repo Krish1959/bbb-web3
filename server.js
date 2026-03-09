@@ -1,11 +1,7 @@
-// Server version _v6.5
-// UPDATED FOR DUAL AVATAR SUPPORT
-// Changes from v4:
-// - Support BOTH Old (Interactive Avatar) and New (Live Avatar) formats
-// - Detect avatar type automatically (script tag vs iframe)
-// - Support both Context ID formats (UUID with hyphens or legacy 32-char hex)
-// - Removed "HeyGen" mentions - replaced with generic "Avatar" references
-// - Auto-detects and handles both avatar script types seamlessly
+// Server version _v5.1(Ver 7)
+// FIXED AVATAR RENDERING - Following Manual Fix Template
+// Key Change: Inject avatars directly into container, not to document.body
+// This prevents double avatars and floating popups
 
 const express = require('express');
 const axios = require('axios');
@@ -18,60 +14,53 @@ const nodemailer = require('nodemailer');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
+const PORT = process.env.PORT || 3000;
+const RENDER_DOMAIN = process.env.RENDER_DOMAIN || 'http://localhost:3000';
 const AVATAR_API_KEY = process.env.HEYGEN_API_KEY || process.env.AVATAR_API_KEY;
 const AVATAR_API_BASE = process.env.HEYGEN_API_BASE || process.env.AVATAR_API_BASE || 'https://api.liveavatar.com';
-const RENDER_DOMAIN = process.env.RENDER_DOMAIN || 'localhost:3000';
 
-// Debug logging array
-const debugLogs = [];
-
-function addDebugLog(message, type = 'info') {
-    const timestamp = new Date().toISOString();
-    const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
-    console.log(logEntry);
-    debugLogs.push(logEntry);
-    if (debugLogs.length > 100) debugLogs.shift();
-}
-
-// Email transporter setup
+// Email Configuration
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: process.env.SMTP_USER || 'agentic.avai@gmail.com',
-        pass: process.env.SMTP_PASS || ''
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
     }
 });
 
-transporter.verify((error, success) => {
-    if (error) {
-        addDebugLog(`❌ Email service error: ${error.message}`, 'error');
-    } else {
-        addDebugLog('✅ Email service ready', 'success');
-    }
+// Debug logging
+let debugLogs = [];
+function addDebugLog(message, type = 'info') {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+    debugLogs.push(logEntry);
+    console.log(logEntry);
+}
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Form page
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'form-page.html'));
 });
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static('.'));
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', message: 'Server is running' });
+});
 
-/**
- * Detect avatar type from script
- * Returns: 'modern' (iframe) or 'legacy' (script tag)
- */
+// Detect avatar type (modern iframe vs legacy script)
 function detectAvatarType(script) {
-    if (script.includes('<iframe')) {
-        return 'modern';  // Modern Live Avatar format
-    } else if (script.includes('<script')) {
-        return 'legacy';  // Legacy Interactive Avatar format
-    }
+    if (script.includes('<iframe')) return 'modern';
+    else if (script.includes('<script')) return 'legacy';
     return 'unknown';
 }
 
-/**
- * Detect context ID format
- * Returns: 'uuid' (with hyphens) or 'legacy' (32 hex chars)
- */
+// Detect context ID format
 function detectContextIdFormat(contextId) {
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const legacyPattern = /^[0-9a-f]{32}$/i;
@@ -84,120 +73,11 @@ function detectContextIdFormat(contextId) {
     return 'unknown';
 }
 
-/**
- * POST /api/create-avatar-page
- * Main endpoint for creating avatar pages
- * Supports both Old Interactive Avatar and New Live Avatar
- */
-app.post('/api/create-avatar-page', async (req, res) => {
-    try {
-        addDebugLog('--- NEW REQUEST ---', 'info');
-        const { contextName, contextId, avatarScript, email } = req.body;
-
-        if (!contextName || !contextId || !avatarScript || !email) {
-            const error = 'Missing required fields (contextName, contextId, avatarScript, email)';
-            addDebugLog(error, 'error');
-            return res.status(400).json({ message: error });
-        }
-
-        addDebugLog(`Processing: ${contextName}`, 'info');
-        addDebugLog(`API Key present: ${AVATAR_API_KEY ? '✅ Yes' : '❌ No'}`, 'info');
-
-        // Detect avatar types
-        const avatarType = detectAvatarType(avatarScript);
-        const contextIdFormat = detectContextIdFormat(contextId);
-        addDebugLog(`Avatar Type Detected: ${avatarType} | Context ID Format: ${contextIdFormat}`, 'info');
-
-        // Fetch context from Avatar API (if API key is available AND context ID is UUID format)
-        let contextData = null;
-        if (AVATAR_API_KEY && contextIdFormat === 'uuid') {
-            try {
-                addDebugLog(`Fetching context from Avatar API...`, 'info');
-                contextData = await fetchAvatarContext(contextId);
-                addDebugLog(`✅ Avatar API fetch successful`, 'success');
-            } catch (error) {
-                addDebugLog(`⚠️ Avatar API Error (continuing anyway): ${error.message}`, 'warning');
-                contextData = null; // Continue without context data
-            }
-        } else if (contextIdFormat === 'legacy') {
-            addDebugLog(`ℹ️ Legacy Context ID format detected - skipping API fetch (Knowledge Base IDs not supported in new API)`, 'info');
-            contextData = null;
-        } else {
-            addDebugLog(`⚠️ No API key configured - skipping context fetch`, 'warning');
-            contextData = null;
-        }
-
-        // Generate static HTML page
-        const pageSlug = contextName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const pageUrl = `${RENDER_DOMAIN}/avatars/${pageSlug}.html`;
-        
-        addDebugLog(`Generating page: ${pageSlug}`, 'info');
-        const htmlContent = generateAvatarPage({
-            contextName,
-            contextId,
-            avatarScript,
-            avatarType,
-            contextData,
-            email,
-            pageSlug,
-            debugLogs,
-            contextIdFormat
-        });
-
-        // Save to file system
-        const outputDir = path.join(__dirname, 'avatars');
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const filePath = path.join(outputDir, `${pageSlug}.html`);
-        fs.writeFileSync(filePath, htmlContent);
-        addDebugLog(`✅ Page saved: ${filePath}`, 'success');
-
-        // Log metadata
-        const metadata = {
-            id: uuidv4(),
-            contextName,
-            contextId,
-            pageSlug,
-            pageUrl,
-            email,
-            avatarType,
-            contextIdFormat,
-            createdAt: new Date().toISOString()
-        };
-
-        logPageMetadata(metadata);
-        await sendEmailNotification(email, contextName, pageUrl, metadata);
-        addDebugLog(`✅ All tasks completed`, 'success');
-
-        res.status(200).json({
-            success: true,
-            message: 'Avatar page created successfully',
-            pageUrl,
-            metadata,
-            debug: debugLogs
-        });
-
-    } catch (error) {
-        addDebugLog(`❌ Unexpected error: ${error.message}`, 'error');
-        res.status(500).json({ 
-            message: 'Internal server error',
-            error: error.message,
-            debug: debugLogs
-        });
-    }
-});
-
-/**
- * Fetch context from Avatar API
- * v5: Handles both old and new context formats
- */
+// Fetch context from Avatar API
 async function fetchAvatarContext(contextId) {
     try {
         const url = `${AVATAR_API_BASE}/v1/contexts/${contextId}`;
         addDebugLog(`API Call: ${url}`, 'info');
-        addDebugLog(`Auth Method: X-API-Key header`, 'info');
         
         const response = await axios.get(url, {
             headers: {
@@ -207,442 +87,502 @@ async function fetchAvatarContext(contextId) {
             timeout: 10000
         });
 
-        addDebugLog(`✅ Response Status: ${response.status} ${response.statusText}`, 'success');
-        
-        // Extract from NESTED data structure
-        // Avatar API returns: { code, data: { ... }, message }
         const nestedData = response.data.data || response.data;
         
-        addDebugLog(`Response structure: code=${response.data.code}, data keys=${Object.keys(nestedData).join(', ')}`, 'info');
-
-        // Extract content from multiple possible fields
-        const contextContent = nestedData.description || 
-                             nestedData.content || 
-                             nestedData.prompt ||
-                             nestedData.opening_intro ||
-                             'No context content available';
-
-        const contentLength = contextContent.length;
-        addDebugLog(`✅ Context content extracted: ${contentLength} characters`, 'success');
-
         return {
             id: nestedData.id || contextId,
             name: nestedData.name || 'Unnamed Context',
-            description: nestedData.description || '',
-            content: contextContent,
-            opening_intro: nestedData.opening_intro || '',
-            urls: nestedData.urls || [],
-            persona: nestedData.persona || '',
-            metadata: nestedData.metadata || {}
+            content: nestedData.content || nestedData.description || 'Context available',
+            opening_intro: nestedData.opening_intro || ''
         };
 
     } catch (error) {
-        addDebugLog(`API Error Status: ${error.response?.status || 'Unknown'}`, 'error');
-        addDebugLog(`API Error: ${error.response?.data?.message || error.message}`, 'error');
-        throw new Error(`Avatar API Error (${error.response?.status}): ${error.response?.data?.message || error.message}`);
+        throw new Error(`Avatar API Error: ${error.response?.data?.message || error.message}`);
     }
 }
 
-/**
- * Generate HTML page
- * v5: Supports both avatar types (modern iframe and legacy script)
- */
-function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, contextData, email, pageSlug, debugLogs, contextIdFormat }) {
-    const contextText = (contextData?.content || 'Context content available').substring(0, 1000);
-    const references = contextData ? extractUrls(contextData.content || '') : [];
+// Extract URLs from content
+function extractUrls(content) {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return (content.match(urlRegex) || []).filter((url, idx, arr) => arr.indexOf(url) === idx);
+}
 
+// HTML escape
+function escapeHtml(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+// CREATE AVATAR PAGE ENDPOINT
+app.post('/api/create-avatar-page', async (req, res) => {
+    debugLogs = [];
+    
+    try {
+        addDebugLog('NEW REQUEST', 'info');
+        const { contextName, contextId, avatarScript, email } = req.body;
+
+        if (!contextName || !contextId || !avatarScript || !email) {
+            const error = 'Missing required fields';
+            addDebugLog(error, 'error');
+            return res.status(400).json({ message: error });
+        }
+
+        addDebugLog(`Processing: ${contextName}`, 'info');
+
+        // Detect types
+        const avatarType = detectAvatarType(avatarScript);
+        const contextIdFormat = detectContextIdFormat(contextId);
+        addDebugLog(`Avatar Type: ${avatarType} | Context ID Format: ${contextIdFormat}`, 'info');
+
+        // Fetch context only for UUID format
+        let contextData = null;
+        if (AVATAR_API_KEY && contextIdFormat === 'uuid') {
+            try {
+                addDebugLog(`Fetching context from API...`, 'info');
+                contextData = await fetchAvatarContext(contextId);
+                addDebugLog(`✅ API fetch successful`, 'success');
+            } catch (error) {
+                addDebugLog(`⚠️ API Error (continuing): ${error.message}`, 'warning');
+                contextData = null;
+            }
+        } else if (contextIdFormat === 'legacy') {
+            addDebugLog(`ℹ️ Legacy format - skipping API fetch`, 'info');
+        }
+
+        // Generate page
+        const pageSlug = contextName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const pageUrl = `${RENDER_DOMAIN}/avatars/${pageSlug}.html`;
+
+        addDebugLog(`Generating page: ${pageSlug}`, 'info');
+        const htmlContent = generateAvatarPage({
+            contextName,
+            contextId,
+            avatarScript,
+            avatarType,
+            email,
+            pageSlug,
+            debugLogs
+        });
+
+        // Save file
+        const outputDir = path.join(__dirname, 'avatars');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const filePath = path.join(outputDir, `${pageSlug}.html`);
+        fs.writeFileSync(filePath, htmlContent);
+        addDebugLog(`✅ Page saved: ${filePath}`, 'success');
+
+        // Send email
+        await sendEmailNotification(email, contextName, pageUrl);
+        addDebugLog(`✅ Email sent`, 'success');
+
+        res.status(200).json({
+            success: true,
+            message: 'Avatar page created successfully',
+            pageUrl,
+            debug: debugLogs
+        });
+
+    } catch (error) {
+        addDebugLog(`❌ Error: ${error.message}`, 'error');
+        res.status(500).json({
+            message: 'Internal server error',
+            error: error.message,
+            debug: debugLogs
+        });
+    }
+});
+
+// GENERATE AVATAR PAGE FUNCTION
+function generateAvatarPage({ contextName, contextId, avatarScript, avatarType, email, pageSlug, debugLogs }) {
     return `<!DOCTYPE html>
-<!-- server_v5.js - DUAL AVATAR SUPPORT -->
-<!-- Supports both Modern Live Avatar (iframe) and Legacy Interactive Avatar (script) -->
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Avatar Agentic AI - ${escapeHtml(contextName)}</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; min-height: 100vh; background: #f5f5f5; }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Avatar Agentic AI – ${escapeHtml(contextName)}</title>
 
-        /* Glittering dark brown header */
-        .header {
-            background: linear-gradient(135deg, #3d2314 0%, #5c3a2d 25%, #3d2314 50%, #5c3a2d 75%, #3d2314 100%);
-            background-size: 400% 400%;
-            animation: glitter 3s ease-in-out infinite;
-            padding: 40px 20px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-            color: white;
-        }
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600&family=Raleway:wght@400;600&display=swap" rel="stylesheet" />
 
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 200%;
-            height: 100%;
-            background: linear-gradient(
-                90deg,
-                transparent 0%,
-                rgba(255, 215, 0, 0.1) 25%,
-                rgba(255, 215, 0, 0.3) 50%,
-                rgba(255, 215, 0, 0.1) 75%,
-                transparent 100%
-            );
-            animation: shimmer 2.5s infinite;
-        }
+  <style>
+    /* ─── Reset & Base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: clamp(14px, 1.5vw, 18px); }
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-family: 'Raleway', sans-serif;
+      overflow-x: hidden;
+    }
 
-        @keyframes glitter {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-        }
+    /* ─── Golden Colour Palette ─────────────────────────────────────────────── */
+    :root {
+      --gold-light:   #FFE066;
+      --gold-mid:     #FFD700;
+      --gold-deep:    #C9A84C;
+      --gold-shine:   #FFF5B0;
+      --dark-brown:   #1A0A00;
+      --ocean-blue:   #020E2A;
+      --ocean-mid:    #041E42;
+      --ocean-bright: #0A3060;
+      --body-bg:      #0D0D1A;
+    }
 
-        @keyframes shimmer {
-            0% { transform: translateX(-50%); }
-            100% { transform: translateX(50%); }
-        }
+    /* ─── HERO ───────────────────────────────────────────────────────── */
+    .hero {
+      position: relative;
+      width: 100%;
+      min-height: clamp(220px, 35vh, 380px);
+      background: radial-gradient(ellipse at 50% 0%, #3B1500 0%, #1A0A00 55%, #0D0500 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: clamp(2rem, 5vw, 4rem) clamp(1rem, 4vw, 3rem);
+    }
 
-        .header h1 {
-            color: #FFD700;
-            font-size: 2.5rem;
-            font-weight: 700;
-            text-shadow: 0 0 20px rgba(255, 215, 0, 0.4), 2px 2px 4px rgba(0, 0, 0, 0.5);
-            letter-spacing: 2px;
-            position: relative;
-            z-index: 1;
-            margin-bottom: 5px;
-        }
+    #starCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
 
-        .header h2 {
-            color: rgba(255, 215, 0, 0.9);
-            font-size: 1.2rem;
-            font-weight: 400;
-            position: relative;
-            z-index: 1;
-        }
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+    }
 
-        .gold-divider {
-            height: 3px;
-            background: linear-gradient(90deg, transparent 0%, #FFD700 50%, transparent 100%);
-        }
+    .main-heading {
+      font-family: 'Cinzel Decorative', serif;
+      font-weight: 900;
+      font-size: clamp(1.8rem, 5.5vw, 5rem);
+      letter-spacing: clamp(0.05em, 0.4vw, 0.18em);
+      text-transform: uppercase;
+      line-height: 1.15;
+      background: linear-gradient(180deg, var(--gold-shine) 0%, var(--gold-mid) 30%, var(--gold-deep) 65%, var(--gold-mid) 85%, var(--gold-shine) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      filter: drop-shadow(0 0 12px rgba(255, 215, 0, 0.65)) drop-shadow(0 0 28px rgba(255, 215, 0, 0.35));
+      background-size: 100% 200%;
+      animation: shimmer 4s ease-in-out infinite alternate;
+    }
 
-        .container {
-            max-width: 1400px;
-            margin: 30px auto;
-            padding: 20px;
-        }
+    @keyframes shimmer {
+      0%   { background-position: 0% 0%; }
+      100% { background-position: 0% 100%; }
+    }
 
-        .content-wrapper {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 30px;
-        }
+    .hero-rule {
+      width: 80px;
+      height: 2px;
+      border: none;
+      background: linear-gradient(90deg, transparent, var(--gold-mid), transparent);
+      margin: 1rem 0 0 0;
+    }
 
-        .content-left, .content-right {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
+    /* ─── SUBHERO ─────────────────────────────────────────────────── */
+    .subhero {
+      background: linear-gradient(135deg, var(--ocean-mid) 0%, var(--ocean-bright) 100%);
+      padding: clamp(1.2rem, 3vw, 2rem) 1rem;
+      text-align: center;
+    }
 
-        .content-left h3, .content-right h3 {
-            color: #3d2314;
-            font-size: 1.5rem;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #FFD700;
-            padding-bottom: 10px;
-        }
+    .sub-heading {
+      font-family: 'Cinzel', serif;
+      font-size: clamp(1rem, 2.5vw, 1.8rem);
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: var(--gold-light);
+      text-transform: uppercase;
+    }
 
-        .content-left p {
-            color: #555;
-            line-height: 1.6;
-            margin-bottom: 15px;
-            text-align: justify;
-        }
+    /* ─── AVATAR SECTION ──────────────────────────────────────────── */
+    .avatar-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: clamp(2rem, 4vw, 3rem) 1rem;
+      background: var(--body-bg);
+    }
 
-        .content-left code {
-            background: #f0f0f0;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            color: #c41e3a;
-        }
+    .avatar-label {
+      font-size: clamp(0.9rem, 2vw, 1.2rem);
+      color: var(--gold-mid);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+      font-weight: 600;
+    }
 
-        .content-right {
-            position: relative;
-            min-height: 600px;
-            background: #1a1a1a;
-            border-radius: 8px;
-            overflow: hidden;
-        }
+    .avatar-card {
+      width: 100%;
+      max-width: 800px;
+      aspect-ratio: 16 / 9;
+      min-height: 400px;
+      border-radius: 12px;
+      box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.12), 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 60px rgba(255, 215, 0, 0.08);
+      background: #000;
+      position: relative;
+      overflow: hidden;
+    }
 
-        /* Handle both iframe and script embed styles */
-        .content-right iframe {
-            width: 100%;
-            height: 600px;
-            border: none;
-            border-radius: 8px;
-        }
+    .avatar-card iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
 
-        .content-right script {
-            display: none;
-        }
+    .avatar-card::before, .avatar-card::after {
+      content: '';
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      border-color: var(--gold-mid);
+      border-style: solid;
+      opacity: 0.7;
+      z-index: 3;
+      pointer-events: none;
+    }
+    .avatar-card::before {
+      top: 10px; left: 10px;
+      border-width: 3px 0 0 3px;
+      border-radius: 4px 0 0 0;
+    }
+    .avatar-card::after {
+      bottom: 10px; right: 10px;
+      border-width: 0 3px 3px 0;
+      border-radius: 0 0 4px 0;
+    }
 
-        /* Override legacy script fixed positioning - make it fill container */
-        #heygen-streaming-embed {
-            position: relative !important;
-            left: auto !important;
-            bottom: auto !important;
-            width: 100% !important;
-            height: 100% !important;
-            border-radius: 8px !important;
-            min-height: 600px !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
+    /* Debug Console */
+    .debug-console {
+      width: 100%;
+      max-width: 900px;
+      margin-top: 2rem;
+      background: #0a0a0a;
+      border: 1px solid var(--gold-deep);
+      border-radius: 8px;
+      padding: 15px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75rem;
+      color: #0f0;
+      max-height: 300px;
+      overflow-y: auto;
+      line-height: 1.4;
+    }
 
-        /* When expanded, keep it full size */
-        #heygen-streaming-embed.expand {
-            width: 100% !important;
-            height: 100% !important;
-            transform: none !important;
-            left: auto !important;
-            bottom: auto !important;
-            border-radius: 8px !important;
-        }
+    .debug-console .title {
+      color: var(--gold-mid);
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
 
-        /* Style the container for legacy scripts */
-        #heygen-streaming-container {
-            width: 100% !important;
-            height: 100% !important;
-        }
+    .debug-console .info { color: #0f0; }
+    .debug-console .success { color: #0f0; }
+    .debug-console .warning { color: #ff0; }
+    .debug-console .error { color: #f00; }
 
-        #heygen-streaming-embed.show {
-            opacity: 1 !important;
-            visibility: visible !important;
-        }
+    footer {
+      background: var(--dark-brown);
+      text-align: center;
+      padding: clamp(0.8rem, 2vw, 1.4rem) 1rem;
+      font-size: clamp(0.7rem, 1vw, 0.85rem);
+      color: var(--gold-deep);
+      letter-spacing: 0.08em;
+      opacity: 0.75;
+    }
 
-        .references {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            margin-top: 30px;
-            width: 100%;
-        }
-
-        .references h3 {
-            color: #3d2314;
-            font-size: 1.5rem;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #FFD700;
-            padding-bottom: 10px;
-        }
-
-        .references ul { list-style: none; columns: 2; column-gap: 30px; }
-        .references li { margin-bottom: 12px; break-inside: avoid; }
-        .references a { color: #FFD700; text-decoration: none; font-weight: 500; word-break: break-all; }
-        .references a:hover { text-decoration: underline; }
-
-        .metadata {
-            background: #E8D4A8;
-            padding: 20px;
-            text-align: center;
-            margin-top: 30px;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            color: #333;
-            width: 100%;
-        }
-
-        .metadata a {
-            color: #3d2314;
-            text-decoration: none;
-            font-weight: bold;
-        }
-
-        .metadata a:hover {
-            text-decoration: underline;
-        }
-
-        .debug-console {
-            background: #1a1a1a;
-            color: #0f0;
-            padding: 20px;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.75rem;
-            line-height: 1.5;
-            margin-top: 30px;
-            max-height: 400px;
-            overflow-y: auto;
-            border: 3px solid #FFD700;
-            width: 100%;
-        }
-
-        .debug-console .title {
-            color: #FFD700;
-            font-weight: bold;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #FFD700;
-            padding-bottom: 10px;
-        }
-
-        .debug-console .info { color: #0f0; }
-        .debug-console .error { color: #f00; }
-        .debug-console .success { color: #0f0; }
-        .debug-console .warning { color: #ff0; }
-
-        @media (max-width: 1024px) {
-            .content-wrapper { grid-template-columns: 1fr; }
-            .references ul { columns: 1; }
-            .content-right iframe { height: 450px; }
-        }
-    </style>
+    @media (min-width: 768px) {
+      .avatar-card { aspect-ratio: 16 / 9; }
+    }
+  </style>
 </head>
 <body>
-    <header class="header">
-        <h1>Avatar Agentic AI Demo</h1>
-        <h2>Interactive AI Assistant for ${escapeHtml(contextName)}</h2>
-    </header>
-    <div class="gold-divider"></div>
 
-    <div class="container">
-        <div class="content-wrapper">
-            <div class="content-left">
-                <h3>📚 Context Information</h3>
-                <p>${escapeHtml(contextText)}</p>
-                <p><strong>Context ID:</strong> <code>${escapeHtml(contextId)}</code></p>
-                ${contextData?.opening_intro ? `<p><strong>Welcome:</strong> ${escapeHtml(contextData.opening_intro)}</p>` : ''}
-            </div>
-            <div class="content-right">
-                ${avatarScript}
-            </div>
-        </div>
-
-        ${references.length > 0 ? '<div class="references"><h3>📖 References</h3><ul>' + 
-            references.map(url => '<li><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a></li>').join('') + 
-            '</ul></div>' : ''}
-
-        <div class="metadata">
-            <p>Generated by <strong>Avatar Agentic AI Pte Ltd.</strong> | Page: ${pageSlug} | v5.0</p>
-            <p>Avatar Type: ${avatarType} | Created: ${new Date().toLocaleString()} | Support: <a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></p>
-        </div>
-
-        <div class="debug-console">
-            <div class="title">✅ Debug Console - v5.0 Dual Avatar Support</div>
-            <div class="info">═══════════════════════════════════════════════════════════</div>
-            <div class="success">✅ Avatar Type: ${avatarType} (${avatarType === 'modern' ? 'Modern iframe-based' : 'Legacy script-based'})</div>
-            <div class="success">✅ Context ID Format: ${escapeHtml(contextIdFormat)}</div>
-            <div class="info">Context: ${escapeHtml(contextName)}</div>
-            <div class="info">ID: ${escapeHtml(contextId)}</div>
-            <div class="info">Page: ${pageSlug}</div>
-            <div class="info">Generated: ${new Date().toISOString()}</div>
-            <div class="info">═══════════════════════════════════════════════════════════</div>
-            <div class="info"><strong>Execution Log:</strong></div>
-            ${debugLogs.map(log => {
-                let className = 'info';
-                if (log.includes('[ERROR]')) className = 'error';
-                if (log.includes('[SUCCESS]')) className = 'success';
-                if (log.includes('[WARNING]')) className = 'warning';
-                return `<div class="${className}">${escapeHtml(log)}</div>`;
-            }).join('')}
-        </div>
+  <!-- HERO -->
+  <section class="hero" aria-label="Main heading">
+    <canvas id="starCanvas" aria-hidden="true"></canvas>
+    <div class="hero-content">
+      <h1 class="main-heading">Avatar Agentic AI</h1>
+      <hr class="hero-rule" />
     </div>
+  </section>
+
+  <!-- SUB-HEADING -->
+  <section class="subhero" aria-label="Sub-heading">
+    <h2 class="sub-heading">${escapeHtml(contextName)}</h2>
+  </section>
+
+  <!-- AVATAR SECTION -->
+  <section class="avatar-section" aria-label="Avatar demonstration">
+    <p class="avatar-label">${avatarType === 'modern' ? 'Live Avatar' : 'Interactive Avatar'}</p>
+    <div class="avatar-card" id="avatarCard">
+      <!-- Avatar will be injected here -->
+    </div>
+  </section>
+
+  <!-- DEBUG CONSOLE -->
+  <div class="debug-console">
+    <div class="title">✅ Debug Console - v5.1</div>
+    <div class="info">Avatar Type: ${avatarType}</div>
+    <div class="info">Context ID Format: ${detectContextIdFormat(contextId)}</div>
+    <div class="info">Context: ${escapeHtml(contextName)}</div>
+    <div class="info">Page: ${pageSlug}</div>
+    ${debugLogs.map(log => {
+        if (log.includes('[SUCCESS]')) return `<div class="success">${escapeHtml(log)}</div>`;
+        if (log.includes('[ERROR]')) return `<div class="error">${escapeHtml(log)}</div>`;
+        if (log.includes('[WARNING]')) return `<div class="warning">${escapeHtml(log)}</div>`;
+        return `<div class="info">${escapeHtml(log)}</div>`;
+    }).join('')}
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    &copy; 2025 Avatar Agentic AI &nbsp;|&nbsp; Powered by Avatar Agentic AI Pte Ltd
+  </footer>
+
+  <!-- STAR ANIMATION -->
+  <script>
+    (function() {
+      const canvas = document.getElementById('starCanvas');
+      const ctx = canvas.getContext('2d');
+      let stars = [];
+
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+
+      class Star {
+        constructor() {
+          this.x = Math.random() * canvas.width;
+          this.y = Math.random() * canvas.height;
+          this.radius = Math.random() * 1.5;
+          this.opacity = Math.random() * 0.5 + 0.3;
+          this.twinkleSpeed = Math.random() * 0.03 + 0.01;
+          this.twinkleDirection = 1;
+        }
+
+        update() {
+          this.opacity += this.twinkleSpeed * this.twinkleDirection;
+          if (this.opacity >= 1 || this.opacity <= 0.2) {
+            this.twinkleDirection *= -1;
+          }
+        }
+
+        draw() {
+          ctx.fillStyle = 'rgba(255, 215, 0, ' + this.opacity + ')';
+          ctx.fillRect(this.x, this.y, this.radius, this.radius);
+        }
+      }
+
+      function initStars() {
+        stars = [];
+        for (let i = 0; i < 100; i++) {
+          stars.push(new Star());
+        }
+      }
+
+      function animate() {
+        ctx.fillStyle = 'rgba(13, 5, 0, 0.2)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        stars.forEach(star => {
+          star.update();
+          star.draw();
+        });
+
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener('resize', () => {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        initStars();
+      });
+
+      initStars();
+      animate();
+    })();
+  </script>
+
+  <!-- AVATAR INJECTION -->
+  <script>
+    const card = document.getElementById('avatarCard');
+    ${avatarType === 'modern' 
+      ? `// Modern Avatar (iframe)
+      const iframe = document.createElement('iframe');
+      iframe.src = '${escapeHtml(avatarScript.match(/src="([^"]+)"/)?.[1] || '')}';
+      iframe.title = '${escapeHtml(contextName)} Avatar';
+      iframe.allow = 'microphone; camera; autoplay; fullscreen';
+      iframe.allowFullscreen = true;
+      card.appendChild(iframe);`
+      : `// Legacy Avatar (script)
+      const wrapper = document.createElement('div');
+      wrapper.id = 'avatar-wrapper';
+      wrapper.style.width = '100%';
+      wrapper.style.height = '100%';
+      wrapper.style.position = 'relative';
+      card.appendChild(wrapper);
+      
+      // Temporarily replace document.body.appendChild to inject into wrapper
+      const originalAppendChild = wrapper.appendChild.bind(wrapper);
+      const bodyAppendChild = document.body.appendChild;
+      document.body.appendChild = function(element) {
+        if (element.id === 'heygen-streaming-embed') {
+          return originalAppendChild(element);
+        }
+        return bodyAppendChild(element);
+      };
+      
+      ${avatarScript}
+      
+      document.body.appendChild = bodyAppendChild;`}
+  </script>
+
 </body>
 </html>`;
 }
 
-function extractUrls(text) {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const matches = text.match(urlRegex) || [];
-    return [...new Set(matches)].slice(0, 10);
+// Send email notification
+async function sendEmailNotification(email, contextName, pageUrl) {
+    const mailOptions = {
+        from: process.env.SMTP_FROM || 'noreply@avatarai.com',
+        to: email,
+        subject: `Avatar Page Created: ${contextName}`,
+        html: `
+            <h2>Your Avatar Page is Ready!</h2>
+            <p>Your avatar page for <strong>${escapeHtml(contextName)}</strong> has been created successfully.</p>
+            <p><a href="${escapeHtml(pageUrl)}" style="background-color: #FFD700; padding: 10px 20px; text-decoration: none; color: black;">View Your Avatar</a></p>
+            <p>Share this link with others to showcase your interactive avatar.</p>
+        `
+    };
+
+    return transporter.sendMail(mailOptions);
 }
 
-function escapeHtml(text) {
-    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return String(text).replace(/[&<>"']/g, m => map[m]);
-}
-
-async function sendEmailNotification(email, contextName, pageUrl, metadata) {
-    try {
-        addDebugLog(`Sending email to: ${email}`, 'info');
-
-        if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-            addDebugLog(`⚠️ Email service not configured`, 'warning');
-            return;
-        }
-
-        const mailOptions = {
-            from: process.env.SMTP_FROM || 'agentic.avai@gmail.com',
-            to: email,
-            subject: `✅ Your Avatar Page is Ready! - ${contextName}`,
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <h2 style="color: #3d2314;">🎉 Your Avatar Page Has Been Created!</h2>
-                    <p>Your avatar context <strong>${escapeHtml(contextName)}</strong> is now live!</p>
-                    <p><strong>Avatar Type:</strong> ${metadata.avatarType === 'modern' ? 'Modern (Live)' : 'Legacy (Interactive)'}</p>
-                    <p><a href="${pageUrl}" style="display: inline-block; background: #FFD700; color: #3d2314; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Your Avatar Page →</a></p>
-                    <p style="font-size: 0.9rem; color: #666; margin-top: 20px;">Avatar Agentic AI Pte Ltd.</p>
-                </div>
-            `
-        };
-
-        await transporter.sendMail(mailOptions);
-        addDebugLog(`✅ Email sent successfully`, 'success');
-
-    } catch (error) {
-        addDebugLog(`❌ Email failed: ${error.message}`, 'error');
+// Serve generated avatar pages
+app.get('/avatars/:slug.html', (req, res) => {
+    const filePath = path.join(__dirname, 'avatars', req.params.slug + '.html');
+    if (fs.existsSync(filePath)) {
+        res.sendFile(filePath);
+    } else {
+        res.status(404).json({ message: 'Avatar page not found' });
     }
-}
-
-function logPageMetadata(metadata) {
-    const logDir = path.join(__dirname, 'logs');
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    fs.appendFileSync(path.join(logDir, 'pages-generated.jsonl'), JSON.stringify(metadata) + '\n');
-}
-
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        service: 'Avatar Agentic AI',
-        version: 'v5.0-PRODUCTION',
-        features: ['Modern Avatar (iframe)', 'Legacy Avatar (script)', 'Dual Context ID Support'],
-        timestamp: new Date().toISOString(),
-        auth: '✅ X-API-Key',
-        avatar_api: AVATAR_API_KEY ? '✅ Configured' : '⚠️ Optional',
-        email_service: process.env.SMTP_USER ? '✅ Configured' : '❌ Not configured'
-    });
 });
 
-app.get('/api/debug', (req, res) => {
-    res.json({
-        debug_logs: debugLogs,
-        total_logs: debugLogs.length,
-        version: 'v5.0',
-        timestamp: new Date().toISOString()
-    });
-});
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'form-page.html'));
-});
-
-app.use((err, req, res, next) => {
-    addDebugLog(`Unhandled error: ${err.message}`, 'error');
-    res.status(500).json({ message: 'Internal Server Error', error: err.message });
-});
-
+// Start server
 app.listen(PORT, () => {
-    addDebugLog(`🤖 Avatar Agentic AI v5.0 PRODUCTION running on port ${PORT}`, 'success');
-    addDebugLog(`✅ Dual Avatar Support: Modern (iframe) + Legacy (script)`, 'success');
-    addDebugLog(`✅ Context ID Support: UUID + Legacy 32-char hex format`, 'success');
-    addDebugLog(`✅ X-API-Key authentication enabled`, 'success');
-    addDebugLog(`Environment: ${process.env.NODE_ENV}`, 'info');
+    console.log(`✅ Avatar Agentic AI v5.1 running on port ${PORT}`);
 });
 
+module.exports = app;
